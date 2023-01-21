@@ -64,6 +64,7 @@ def main(args, env_name, number, seed):
 
     replay_buffer = ReplayBuffer(args)
     agent = PPO_continuous(args)
+    agent.actor.load_state_dict(torch.load(f'actor-1673598055.8059468.pth'))
 
     # Build a tensorboard
     writer = SummaryWriter(log_dir='runs/PPO_continuous/env_{}_{}_number_{}_seed_{}'.format(env_name, args.policy_dist, number, seed))
@@ -91,6 +92,8 @@ def main(args, env_name, number, seed):
                 action = a
             s_, r, done, _ = env.step(action)
 
+            env.render()
+
             if args.use_state_norm:
                 s_ = state_norm(s_)
             if args.use_reward_norm:
@@ -115,9 +118,6 @@ def main(args, env_name, number, seed):
             if replay_buffer.count == args.batch_size:
                 agent.update(replay_buffer, total_steps)
                 replay_buffer.count = 0
-
-            torch.save(agent.actor.state_dict(), f'actor-{_id}.pth')
-            agent.actor.load_state_dict(torch.load(f'actor-{_id}.pth'))
 
             # Evaluate the policy every 'evaluate_freq' steps
             if total_steps % args.evaluate_freq == 0:
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_norm", type=bool, default=False, help="Trick 3:reward normalization")
-    parser.add_argument("--use_reward_scaling", type=bool, default=False, help="Trick 4:reward scaling")
+    parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
     parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
     parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
     parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
