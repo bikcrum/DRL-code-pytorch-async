@@ -121,15 +121,15 @@ def main(args, env_name, number, seed):
                 print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
                 writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
                 # Save the rewards
-                if evaluate_num % args.save_freq == 0:
-                    np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-                            np.array(evaluate_rewards))
+                # if evaluate_num % args.save_freq == 0:
+                #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
+                #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
     parser.add_argument("--max_train_steps", type=int, default=int(2e7), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3,
+    parser.add_argument("--evaluate_freq", type=float, default=4096,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size")

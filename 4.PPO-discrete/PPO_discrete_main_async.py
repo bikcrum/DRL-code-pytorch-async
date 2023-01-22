@@ -10,6 +10,7 @@ from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
 import ray
+from copy import deepcopy
 
 
 def evaluate_policy(args, env, agent, state_norm):
@@ -33,8 +34,48 @@ def evaluate_policy(args, env, agent, state_norm):
     return evaluate_reward / times
 
 
-def collector():
-    pass
+@ray.remote
+def collector(env, state_norm, reward_scaling, agent, reward_norm, batch_size, args):
+    curr_buf_size = 0
+    replay_buffer = ReplayBuffer(args)
+
+    while curr_buf_size < batch_size:
+        s = env.reset()
+        if args.use_state_norm:
+            s = state_norm(s)
+        if args.use_reward_scaling:
+            reward_scaling.reset()
+        episode_steps = 0
+        done = False
+        while not done:
+            episode_steps += 1
+            a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
+            s_, r, done, _ = env.step(a)
+
+            if args.use_state_norm:
+                s_ = state_norm(s_)
+            if args.use_reward_norm:
+                r = reward_norm(r)
+            elif args.use_reward_scaling:
+                r = reward_scaling(r)
+
+            # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
+            # dw means dead or win,there is no next state s';
+            # but when reaching the max_episode_steps,there is a next state s' actually.
+            if done and episode_steps != args.max_episode_steps:
+                dw = True
+            else:
+                dw = False
+
+            curr_buf_size += 1
+
+            if curr_buf_size > batch_size:
+                return replay_buffer
+
+            replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
+            s = s_
+
+    return replay_buffer
 
 
 def main(args, env_name, number, seed):
@@ -70,71 +111,96 @@ def main(args, env_name, number, seed):
         log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
+    reward_scaling = None
+    reward_norm = None
     if args.use_reward_norm:  # Trick 3:reward normalization
         reward_norm = Normalization(shape=1)
     elif args.use_reward_scaling:  # Trick 4:reward scaling
         reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
 
     pbar = tqdm.tqdm(total=args.max_train_steps)
+    n_workers = 4
     while total_steps < args.max_train_steps:
-        s = env.reset()
-        if args.use_state_norm:
-            s = state_norm(s)
-        if args.use_reward_scaling:
-            reward_scaling.reset()
-        episode_steps = 0
-        done = False
-        while not done:
-            episode_steps += 1
-            a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
-            s_, r, done, _ = env.step(a)
 
-            if args.use_state_norm:
-                s_ = state_norm(s_)
-            if args.use_reward_norm:
-                r = reward_norm(r)
-            elif args.use_reward_scaling:
-                r = reward_scaling(r)
+        # s = env.reset()
+        # if args.use_state_norm:
+        #     s = state_norm(s)
+        # if args.use_reward_scaling:
+        #     reward_scaling.reset()
+        # episode_steps = 0
+        # done = False
+        # while not done:
+        #     episode_steps += 1
+        #     a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
+        #     s_, r, done, _ = env.step(a)
+        #
+        #     if args.use_state_norm:
+        #         s_ = state_norm(s_)
+        #     if args.use_reward_norm:
+        #         r = reward_norm(r)
+        #     elif args.use_reward_scaling:
+        #         r = reward_scaling(r)
+        #
+        #     # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
+        #     # dw means dead or win,there is no next state s';
+        #     # but when reaching the max_episode_steps,there is a next state s' actually.
+        #     if done and episode_steps != args.max_episode_steps:
+        #         dw = True
+        #     else:
+        #         dw = False
+        #
+        #     replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
+        #     s = s_
+        #     total_steps += 1
+        #     pbar.update(1)
 
-            # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
-            # dw means dead or win,there is no next state s';
-            # but when reaching the max_episode_steps,there is a next state s' actually.
-            if done and episode_steps != args.max_episode_steps:
-                dw = True
-            else:
-                dw = False
+        # When the number of transitions in buffer reaches batch_size,then update
+        _args = deepcopy(args)
+        _args.batch_size //= n_workers
 
-            replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
-            s = s_
-            total_steps += 1
-            pbar.update(1)
+        # replay_buffer_1 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
+        # replay_buffer_2 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
+        replay_buffers = ray.get([collector.remote(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args) for _
+                          in range(n_workers)])
 
-            # When the number of transitions in buffer reaches batch_size,then update
-            if replay_buffer.count == args.batch_size:
-                agent.update(replay_buffer, total_steps)
-                replay_buffer.count = 0
+        replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
+        replay_buffer.r = np.vstack([rf.r for rf in replay_buffers])
+        replay_buffer.a = np.vstack([rf.a for rf in replay_buffers])
+        replay_buffer.done = np.vstack([rf.done for rf in replay_buffers])
+        replay_buffer.a_logprob = np.vstack([rf.a_logprob for rf in replay_buffers])
+        replay_buffer.dw = np.vstack([rf.dw for rf in replay_buffers])
+        replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
+        replay_buffer.count = np.sum([rf.count for rf in replay_buffers])
 
-            # Evaluate the policy every 'evaluate_freq' steps
-            if total_steps % args.evaluate_freq == 0:
-                evaluate_num += 1
-                evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
+        assert replay_buffer.count == args.batch_size
 
-                if evaluate_reward > max_reward:
-                    max_reward = evaluate_reward
-                    torch.save(agent.actor.state_dict(), 'agent.pth')
-                evaluate_rewards.append(evaluate_reward)
-                print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
-                writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
-                # Save the rewards
-                if evaluate_num % args.save_freq == 0:
-                    np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-                            np.array(evaluate_rewards))
+        total_steps += replay_buffer.count
+        pbar.update(replay_buffer.count)
+
+        agent.update(replay_buffer, total_steps)
+        replay_buffer.count = 0
+
+        # Evaluate the policy every 'evaluate_freq' steps
+        if total_steps % args.evaluate_freq == 0:
+            evaluate_num += 1
+            evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
+
+            if evaluate_reward > max_reward:
+                max_reward = evaluate_reward
+                torch.save(agent.actor.state_dict(), 'agent.pth')
+            evaluate_rewards.append(evaluate_reward)
+            print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
+            writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
+            # Save the rewards
+            # if evaluate_num % args.save_freq == 0:
+            #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
+            #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
     parser.add_argument("--max_train_steps", type=int, default=int(2e7), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3,
+    parser.add_argument("--evaluate_freq", type=float, default=4096,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size")
