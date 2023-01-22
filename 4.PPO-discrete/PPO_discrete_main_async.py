@@ -1,9 +1,11 @@
 import datetime
+import logging
+import time
 
 import torch
 import numpy as np
 import tqdm
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 import gym
 import argparse
 from normalization import Normalization, RewardScaling
@@ -11,6 +13,8 @@ from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
 import ray
 from copy import deepcopy
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def evaluate_policy(args, env, agent, state_norm):
@@ -39,6 +43,9 @@ def collector(env, state_norm, reward_scaling, agent, reward_norm, batch_size, a
     curr_buf_size = 0
     replay_buffer = ReplayBuffer(args)
 
+    rewards = []
+    lengths = []
+
     while curr_buf_size < batch_size:
         s = env.reset()
         if args.use_state_norm:
@@ -46,6 +53,7 @@ def collector(env, state_norm, reward_scaling, agent, reward_norm, batch_size, a
         if args.use_reward_scaling:
             reward_scaling.reset()
         episode_steps = 0
+        episode_reward = 0
         done = False
         while not done:
             episode_steps += 1
@@ -59,6 +67,8 @@ def collector(env, state_norm, reward_scaling, agent, reward_norm, batch_size, a
             elif args.use_reward_scaling:
                 r = reward_scaling(r)
 
+            episode_reward += r
+
             # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
             # dw means dead or win,there is no next state s';
             # but when reaching the max_episode_steps,there is a next state s' actually.
@@ -69,13 +79,19 @@ def collector(env, state_norm, reward_scaling, agent, reward_norm, batch_size, a
 
             curr_buf_size += 1
 
-            if curr_buf_size > batch_size:
-                return replay_buffer
+            # if curr_buf_size > batch_size:
+                # if len(rewards) == 0:
+                #     return replay_buffer, episode_reward, episode_steps
+                # else:
+                # return replay_buffer, np.mean(rewards), np.mean(lengths)
 
             replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
             s = s_
 
-    return replay_buffer
+        rewards.append(episode_reward)
+        lengths.append(episode_steps)
+
+    return replay_buffer, np.mean(rewards), np.mean(lengths)
 
 
 def main(args, env_name, number, seed):
@@ -99,16 +115,20 @@ def main(args, env_name, number, seed):
     print("action_dim={}".format(args.action_dim))
     print("max_episode_steps={}".format(args.max_episode_steps))
 
-    evaluate_num = 0  # Record the number of evaluations
-    evaluate_rewards = []  # Record the rewards during the evaluating
     total_steps = 0  # Record the total steps during the training
 
     replay_buffer = ReplayBuffer(args)
     agent = PPO_discrete(args)
 
+    run = wandb.init(
+        entity='team-osu',
+        project=f'toy-test-{env_name}',
+        name=str(time_now),
+        config=args.__dict__
+    )
     # Build a tensorboard
-    writer = SummaryWriter(
-        log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
+    # writer = SummaryWriter(
+    #     log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     reward_scaling = None
@@ -119,7 +139,11 @@ def main(args, env_name, number, seed):
         reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
 
     pbar = tqdm.tqdm(total=args.max_train_steps)
-    n_workers = 4
+
+    n_workers = args.n_workers
+    _args = deepcopy(args)
+    _args.batch_size //= n_workers
+
     while total_steps < args.max_train_steps:
 
         # s = env.reset()
@@ -155,46 +179,63 @@ def main(args, env_name, number, seed):
         #     pbar.update(1)
 
         # When the number of transitions in buffer reaches batch_size,then update
-        _args = deepcopy(args)
-        _args.batch_size //= n_workers
 
         # replay_buffer_1 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
         # replay_buffer_2 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
-        replay_buffers = ray.get([collector.remote(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args) for _
-                          in range(n_workers)])
+        replay_buffers = ray.get(
+            [collector.remote(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args) for _
+             in range(n_workers)])
 
-        replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
-        replay_buffer.r = np.vstack([rf.r for rf in replay_buffers])
-        replay_buffer.a = np.vstack([rf.a for rf in replay_buffers])
-        replay_buffer.done = np.vstack([rf.done for rf in replay_buffers])
-        replay_buffer.a_logprob = np.vstack([rf.a_logprob for rf in replay_buffers])
-        replay_buffer.dw = np.vstack([rf.dw for rf in replay_buffers])
-        replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
-        replay_buffer.count = np.sum([rf.count for rf in replay_buffers])
+        # replay_buffer.s = np.vstack([rf.s for rf, _, _ in replay_buffers])
+        # replay_buffer.r = np.vstack([rf.r for rf, _, _ in replay_buffers])
+        # replay_buffer.a = np.vstack([rf.a for rf, _, _ in replay_buffers])
+        # replay_buffer.done = np.vstack([rf.done for rf, _, _ in replay_buffers])
+        # replay_buffer.a_logprob = np.vstack([rf.a_logprob for rf, _, _ in replay_buffers])
+        # replay_buffer.dw = np.vstack([rf.dw for rf, _, _ in replay_buffers])
+        # replay_buffer.s_ = np.vstack([rf.s_ for rf, _, _ in replay_buffers])
+        # replay_buffer.count = np.sum([rf.count for rf, _, _ in replay_buffers])
 
-        assert replay_buffer.count == args.batch_size
+        replay_buffer.s = np.vstack([rf.s for rf, _, _ in replay_buffers])
+        replay_buffer.r = np.hstack([rf.r for rf, _, _ in replay_buffers])[:,np.newaxis]
+        replay_buffer.a = np.hstack([rf.a for rf, _, _ in replay_buffers])[:,np.newaxis]
+        replay_buffer.done = np.hstack([rf.done for rf, _, _ in replay_buffers])[:,np.newaxis]
+        replay_buffer.a_logprob = np.hstack([rf.a_logprob for rf, _, _ in replay_buffers])[:,np.newaxis]
+        replay_buffer.dw = np.hstack([rf.dw for rf, _, _ in replay_buffers])[:,np.newaxis]
+        replay_buffer.s_ = np.vstack([rf.s_ for rf, _, _ in replay_buffers])
+        replay_buffer.count = np.sum([len(rf.a) for rf, _, _ in replay_buffers])
+
+        reward = np.mean([r for _, r, _ in replay_buffers])
+        length = np.mean([l for _, _, l in replay_buffers])
+
+        # assert replay_buffer.count == args.batch_size
 
         total_steps += replay_buffer.count
         pbar.update(replay_buffer.count)
 
         agent.update(replay_buffer, total_steps)
+
         replay_buffer.count = 0
 
-        # Evaluate the policy every 'evaluate_freq' steps
-        if total_steps % args.evaluate_freq == 0:
-            evaluate_num += 1
-            evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
+        # reward = replay_buffer.r[:replay_buffer.count].mean()
 
-            if evaluate_reward > max_reward:
-                max_reward = evaluate_reward
-                torch.save(agent.actor.state_dict(), 'agent.pth')
-            evaluate_rewards.append(evaluate_reward)
-            print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
-            writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
-            # Save the rewards
-            # if evaluate_num % args.save_freq == 0:
-            #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-            #             np.array(evaluate_rewards))
+        log = {'episode_reward': reward,
+               'episode_length': length,
+               'total_steps': total_steps,
+               'time_elapsed': (datetime.datetime.now() - time_now).seconds}
+
+        logging.info(log)
+        wandb.log(log)
+
+        if reward > max_reward:
+            max_reward = reward
+            torch.save(agent.actor.state_dict(), f'agent-{time_now}.pth')
+
+    run.finish()
+
+    # Save the rewards
+    # if evaluate_num % args.save_freq == 0:
+    #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
+    #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
@@ -203,7 +244,8 @@ if __name__ == '__main__':
     parser.add_argument("--evaluate_freq", type=float, default=4096,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
-    parser.add_argument("--batch_size", type=int, default=2048, help="Batch size")
+    parser.add_argument("--n_workers", type=int, default=8, help="Number of collectors")
+    parser.add_argument("--batch_size", type=int, default=4096, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=64, help="Minibatch size")
     parser.add_argument("--hidden_width", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
@@ -227,5 +269,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_name = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 1
+    env_index = 0
     main(args, env_name=env_name[env_index], number=1, seed=0)
