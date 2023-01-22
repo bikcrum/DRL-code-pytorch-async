@@ -1,5 +1,3 @@
-import time
-
 import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
@@ -36,8 +34,6 @@ def evaluate_policy(args, env, agent, state_norm):
 
 
 def main(args, env_name, number, seed):
-    _id = time.time()
-
     env = gym.make(env_name)
     env_evaluate = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
     # Set random seed
@@ -116,9 +112,6 @@ def main(args, env_name, number, seed):
                 agent.update(replay_buffer, total_steps)
                 replay_buffer.count = 0
 
-            torch.save(agent.actor.state_dict(), f'actor-{_id}.pth')
-            agent.actor.load_state_dict(torch.load(f'actor-{_id}.pth'))
-
             # Evaluate the policy every 'evaluate_freq' steps
             if total_steps % args.evaluate_freq == 0:
                 evaluate_num += 1
@@ -147,9 +140,9 @@ if __name__ == '__main__':
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
     parser.add_argument("--K_epochs", type=int, default=10, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
-    parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
+    parser.add_argument("--use_state_norm", type=bool, default=True, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_norm", type=bool, default=False, help="Trick 3:reward normalization")
-    parser.add_argument("--use_reward_scaling", type=bool, default=False, help="Trick 4:reward scaling")
+    parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
     parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
     parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
     parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
