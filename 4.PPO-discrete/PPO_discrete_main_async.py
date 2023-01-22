@@ -9,6 +9,7 @@ import argparse
 from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
+import ray
 
 
 def evaluate_policy(args, env, agent, state_norm):
@@ -30,6 +31,10 @@ def evaluate_policy(args, env, agent, state_norm):
         evaluate_reward += episode_reward
 
     return evaluate_reward / times
+
+
+def collector():
+    pass
 
 
 def main(args, env_name, number, seed):

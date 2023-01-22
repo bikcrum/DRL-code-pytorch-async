@@ -12,7 +12,7 @@ from ppo_discrete import PPO_discrete
 
 
 def evaluate_policy(args, env, agent, state_norm):
-    times = 3
+    times = 1
     evaluate_reward = 0
     for _ in range(times):
         s = env.reset()
@@ -27,6 +27,7 @@ def evaluate_policy(args, env, agent, state_norm):
                 s_ = state_norm(s_, update=False)
             episode_reward += r
             s = s_
+            env.render()
         evaluate_reward += episode_reward
 
     return evaluate_reward / times
@@ -53,16 +54,9 @@ def main(args, env_name, number, seed):
     print("action_dim={}".format(args.action_dim))
     print("max_episode_steps={}".format(args.max_episode_steps))
 
-    evaluate_num = 0  # Record the number of evaluations
-    evaluate_rewards = []  # Record the rewards during the evaluating
-    total_steps = 0  # Record the total steps during the training
-
-    replay_buffer = ReplayBuffer(args)
     agent = PPO_discrete(args)
 
-    # Build a tensorboard
-    writer = SummaryWriter(
-        log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
+    agent.actor.load_state_dict(torch.load('agent.pth'))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -70,60 +64,9 @@ def main(args, env_name, number, seed):
     elif args.use_reward_scaling:  # Trick 4:reward scaling
         reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
 
-    pbar = tqdm.tqdm(total=args.max_train_steps)
-    while total_steps < args.max_train_steps:
-        s = env.reset()
-        if args.use_state_norm:
-            s = state_norm(s)
-        if args.use_reward_scaling:
-            reward_scaling.reset()
-        episode_steps = 0
-        done = False
-        while not done:
-            episode_steps += 1
-            a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
-            s_, r, done, _ = env.step(a)
-
-            if args.use_state_norm:
-                s_ = state_norm(s_)
-            if args.use_reward_norm:
-                r = reward_norm(r)
-            elif args.use_reward_scaling:
-                r = reward_scaling(r)
-
-            # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
-            # dw means dead or win,there is no next state s';
-            # but when reaching the max_episode_steps,there is a next state s' actually.
-            if done and episode_steps != args.max_episode_steps:
-                dw = True
-            else:
-                dw = False
-
-            replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
-            s = s_
-            total_steps += 1
-            pbar.update(1)
-
-            # When the number of transitions in buffer reaches batch_size,then update
-            if replay_buffer.count == args.batch_size:
-                agent.update(replay_buffer, total_steps)
-                replay_buffer.count = 0
-
-            # Evaluate the policy every 'evaluate_freq' steps
-            if total_steps % args.evaluate_freq == 0:
-                evaluate_num += 1
-                evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
-
-                if evaluate_reward > max_reward:
-                    max_reward = evaluate_reward
-                    torch.save(agent.actor.state_dict(), 'agent.pth')
-                evaluate_rewards.append(evaluate_reward)
-                print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
-                writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
-                # Save the rewards
-                if evaluate_num % args.save_freq == 0:
-                    np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-                            np.array(evaluate_rewards))
+    for i in range(1000):
+        evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
+        print(f'Reward:{evaluate_reward}')
 
 
 if __name__ == '__main__':
