@@ -9,8 +9,8 @@ import numpy as np
 import ray
 import torch
 import tqdm
-
 import wandb
+
 from normalization import Normalization, RewardScaling
 from ppo_continuous import PPO_continuous
 from replaybuffer import ReplayBuffer
@@ -190,26 +190,13 @@ def main(args, env_name, number, seed):
 
     while total_steps < args.max_train_steps:
         actor = agent.actor.to(dev_inf)
-        # replay_buffers = \
-        #     [collector(env, state_norm, reward_scaling, actor, reward_norm,
-        #                       _args.batch_size,
-        #                       _args,
-        #                       dev_inf) for _ in range(n_workers)]
-        #
+
         logging.info("Collecting data")
 
         replay_buffers = ray.get([collector.remote(env, state_norm, reward_scaling, actor, reward_norm,
                                                    _args.batch_size,
                                                    _args,
                                                    dev_inf) for _ in range(n_workers)])
-        # replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
-        # replay_buffer.r = np.hstack([rf.r for rf in replay_buffers])[:, np.newaxis]
-        # replay_buffer.a = np.vstack([rf.a for rf in replay_buffers])
-        # replay_buffer.done = np.hstack([rf.done for rf in replay_buffers])[:, np.newaxis]
-        # replay_buffer.a_logprob = np.vstack([rf.a_logprob for rf in replay_buffers])
-        # replay_buffer.dw = np.hstack([rf.dw for rf in replay_buffers])[:, np.newaxis]
-        # replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
-        # replay_buffer.count = np.sum([len(rf.a) for rf in replay_buffers])
 
         replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
         replay_buffer.r = np.vstack([rf.r for rf in replay_buffers])
@@ -220,10 +207,6 @@ def main(args, env_name, number, seed):
         replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
         replay_buffer.count = np.sum([len(rf.a) for rf in replay_buffers])
 
-        # replay_buffer = collector(env, state_norm, reward_scaling, actor, reward_norm,
-        #                           _args.batch_size,
-        #                           _args,
-        #                           dev_inf)
         total_steps += replay_buffer.count
 
         pbar.update(replay_buffer.count)

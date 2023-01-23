@@ -13,7 +13,7 @@ from ppo_continuous import PPO_continuous
 logging.getLogger().setLevel(logging.INFO)
 
 
-def evaluate_policy(args, env, agent, state_norm):
+def evaluate_policy(args, env, agent, state_norm, device):
     times = 3
     evaluate_reward = 0
     for _ in range(times):
@@ -23,7 +23,7 @@ def evaluate_policy(args, env, agent, state_norm):
         done = False
         episode_reward = 0
         while not done:
-            a = agent.evaluate(s)  # We use the deterministic policy during the evaluating
+            a = agent.evaluate(s, device)  # We use the deterministic policy during the evaluating
             if args.policy_dist == "Beta":
                 action = 2 * (a - 0.5) * args.max_action  # [0,1]->[-max,max]
             else:
@@ -33,6 +33,7 @@ def evaluate_policy(args, env, agent, state_norm):
                 s_ = state_norm(s_, update=False)
             episode_reward += r
             s = s_
+            env.render()
         evaluate_reward += episode_reward
 
     return evaluate_reward / times
@@ -67,11 +68,8 @@ def main(args, env_name, number, seed):
 
     replay_buffer = ReplayBuffer(args)
     agent = PPO_continuous(args)
-    agent.actor.load_state_dict(torch.load(f'saved_models/agent-2023-01-23 02:52:37.711714.pth', map_location=torch.device('cpu')))
-
-    # Build a tensorboard
-    writer = SummaryWriter(
-        log_dir='runs/PPO_continuous/env_{}_{}_number_{}_seed_{}'.format(env_name, args.policy_dist, number, seed))
+    agent.actor.load_state_dict(
+        torch.load(f'saved_models/agent-2023-01-23 02:52:37.711714.pth', map_location=torch.device('cpu')))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -79,63 +77,9 @@ def main(args, env_name, number, seed):
     elif args.use_reward_scaling:  # Trick 4:reward scaling
         reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
 
-    while total_steps < args.max_train_steps:
-        s = env.reset()
-        if args.use_state_norm:
-            s = state_norm(s)
-        if args.use_reward_scaling:
-            reward_scaling.reset()
-        episode_steps = 0
-        done = False
-        while not done:
-            episode_steps += 1
-            a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
-            if args.policy_dist == "Beta":
-                action = 2 * (a - 0.5) * args.max_action  # [0,1]->[-max,max]
-            else:
-                action = a
-            s_, r, done, _ = env.step(action)
-
-            env.render()
-
-            if args.use_state_norm:
-                s_ = state_norm(s_)
-            if args.use_reward_norm:
-                r = reward_norm(r)
-            elif args.use_reward_scaling:
-                r = reward_scaling(r)
-
-            # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
-            # dw means dead or win,there is no next state s';
-            # but when reaching the max_episode_steps,there is a next state s' actually.
-            if done and episode_steps != args.max_episode_steps:
-                dw = True
-            else:
-                dw = False
-
-            # Take the 'action'，but store the original 'a'（especially for Beta）
-            replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
-            s = s_
-            total_steps += 1
-
-            # When the number of transitions in buffer reaches batch_size,then update
-            if replay_buffer.count == args.batch_size:
-                agent.update(replay_buffer, total_steps)
-                replay_buffer.count = 0
-
-            # Evaluate the policy every 'evaluate_freq' steps
-            if total_steps % args.evaluate_freq == 0:
-                evaluate_num += 1
-                evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
-                evaluate_rewards.append(evaluate_reward)
-                print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
-                writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
-                # Save the rewards
-                if evaluate_num % args.save_freq == 0:
-                    np.save(
-                        './data_train/PPO_continuous_{}_env_{}_number_{}_seed_{}.npy'.format(args.policy_dist, env_name,
-                                                                                             number, seed),
-                        np.array(evaluate_rewards))
+    for i in range(1000):
+        evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm, device=torch.device('cpu'))
+        print(f'Reward:{evaluate_reward}')
 
 
 if __name__ == '__main__':

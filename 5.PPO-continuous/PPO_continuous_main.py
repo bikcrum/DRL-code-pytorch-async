@@ -1,18 +1,17 @@
+import argparse
 import datetime
 import logging
 import os
 
-import torch
-import numpy as np
-import tqdm
-
-import wandb
-from torch.utils.tensorboard import SummaryWriter
 import gym
-import argparse
+import numpy as np
+import torch
+import tqdm
+import wandb
+
 from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
 from ppo_continuous import PPO_continuous
+from replaybuffer import ReplayBuffer
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -82,10 +81,6 @@ def main(args, env_name, number, seed):
     replay_buffer = ReplayBuffer(args)
     agent = PPO_continuous(args)
 
-    # Build a tensorboard
-    writer = SummaryWriter(
-        log_dir='runs/PPO_continuous/env_{}_{}_number_{}_seed_{}'.format(env_name, args.policy_dist, number, seed))
-
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
         reward_norm = Normalization(shape=1)
@@ -151,11 +146,6 @@ def main(args, env_name, number, seed):
 
                 replay_buffer.count = 0
 
-            # torch.save(agent.actor.state_dict(), f'actor-{_id}.pth')
-            # agent.actor.load_state_dict(torch.load(f'actor-{_id}.pth'))
-
-            # Evaluate the policy every 'evaluate_freq' steps
-
             if total_steps - prev_total_steps >= args.evaluate_freq:
                 reward, length = evaluate_policy(args, env_evaluate, agent, state_norm, device=torch.device('cpu'))
 
@@ -172,10 +162,6 @@ def main(args, env_name, number, seed):
                 wandb.log(log)
 
                 prev_total_steps = total_steps
-
-                # Save the rewards
-                # if evaluate_num % args.save_freq == 0:
-                #     np.save('./data_train/PPO_continuous_{}_env_{}_number_{}_seed_{}.npy'.format(args.policy_dist, env_name, number, seed), np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
