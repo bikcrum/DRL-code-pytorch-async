@@ -1,4 +1,6 @@
 import datetime
+import logging
+import os
 
 import torch
 import numpy as np
@@ -10,26 +12,32 @@ from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
 
+import wandb
 
-def evaluate_policy(args, env, agent, state_norm):
-    times = 3
-    evaluate_reward = 0
-    for _ in range(times):
+
+def evaluate_policy(args, env, agent, state_norm, device):
+    epochs = 3
+    reward = 0
+    length = 0
+    for _ in range(epochs):
         s = env.reset()
         if args.use_state_norm:  # During the evaluating,update=False
             s = state_norm(s, update=False)
         done = False
         episode_reward = 0
+        episode_length = 0
         while not done:
-            a = agent.evaluate(s)  # We use the deterministic policy during the evaluating
+            a = agent.evaluate(s, device)  # We use the deterministic policy during the evaluating
             s_, r, done, _ = env.step(a)
             if args.use_state_norm:
                 s_ = state_norm(s_, update=False)
             episode_reward += r
+            episode_length += 1
             s = s_
-        evaluate_reward += episode_reward
+        reward += episode_reward
+        length += episode_length
 
-    return evaluate_reward / times
+    return reward / epochs, length / epochs
 
 
 def main(args, env_name, number, seed):
@@ -60,9 +68,16 @@ def main(args, env_name, number, seed):
     replay_buffer = ReplayBuffer(args)
     agent = PPO_discrete(args)
 
+    run = wandb.init(
+        entity='team-osu',
+        project=f'toy-test-{env_name}',
+        name=str(time_now),
+        config=args.__dict__
+    )
+
     # Build a tensorboard
-    writer = SummaryWriter(
-        log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
+    # writer = SummaryWriter(
+    #     log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -71,6 +86,11 @@ def main(args, env_name, number, seed):
         reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
 
     pbar = tqdm.tqdm(total=args.max_train_steps)
+
+    os.makedirs('checkpoints', exist_ok=True)
+    os.makedirs('saved_models', exist_ok=True)
+
+    prev_total_steps = 0
     while total_steps < args.max_train_steps:
         s = env.reset()
         if args.use_state_norm:
@@ -78,6 +98,7 @@ def main(args, env_name, number, seed):
         if args.use_reward_scaling:
             reward_scaling.reset()
         episode_steps = 0
+        episode_reward = 0
         done = False
         while not done:
             episode_steps += 1
@@ -90,6 +111,8 @@ def main(args, env_name, number, seed):
                 r = reward_norm(r)
             elif args.use_reward_scaling:
                 r = reward_scaling(r)
+
+            episode_reward += r
 
             # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
             # dw means dead or win,there is no next state s';
@@ -106,24 +129,48 @@ def main(args, env_name, number, seed):
 
             # When the number of transitions in buffer reaches batch_size,then update
             if replay_buffer.count == args.batch_size:
-                agent.update(replay_buffer, total_steps)
+                actor_loss, critic_loss = agent.update(replay_buffer, total_steps, device=torch.device('cpu'))
+                print(f'actor_loss:{actor_loss}, critic_loss:{critic_loss}')
+
+                log = {'actor_loss': actor_loss,
+                       'critic_loss': critic_loss,
+                       'total_steps': total_steps,
+                       'time_elapsed': (datetime.datetime.now() - time_now).seconds}
+
+                logging.info(log)
+                wandb.log(log)
+
                 replay_buffer.count = 0
 
-            # Evaluate the policy every 'evaluate_freq' steps
-            if total_steps % args.evaluate_freq == 0:
-                evaluate_num += 1
-                evaluate_reward = evaluate_policy(args, env_evaluate, agent, state_norm)
+            if total_steps - prev_total_steps >= args.evaluate_freq:
+                reward, length = evaluate_policy(args, env_evaluate, agent, state_norm, device=torch.device('cpu'))
 
-                if evaluate_reward > max_reward:
-                    max_reward = evaluate_reward
-                    torch.save(agent.actor.state_dict(), 'agent.pth')
-                evaluate_rewards.append(evaluate_reward)
-                print("evaluate_num:{} \t evaluate_reward:{} \t".format(evaluate_num, evaluate_reward))
-                writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
-                # Save the rewards
-                # if evaluate_num % args.save_freq == 0:
-                #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-                #             np.array(evaluate_rewards))
+                if reward >= max_reward:
+                    max_reward = reward
+                    torch.save(agent.actor.state_dict(), f'saved_models/agent-{time_now}.pth')
+
+                log = {'episode_reward': reward,
+                       'episode_length': length,
+                       'total_steps': total_steps,
+                       'time_elapsed': (datetime.datetime.now() - time_now).seconds}
+
+                logging.info(log)
+                wandb.log(log)
+
+                torch.save({
+                    'total_steps': total_steps,
+                    'actor_state_dict': agent.actor.state_dict(),
+                    'critic_state_dict': agent.critic.state_dict(),
+                    'optimizer_actor_state_dict': agent.optimizer_actor.state_dict(),
+                    'optimizer_critic_state_dict': agent.optimizer_critic.state_dict(),
+                }, f'checkpoints/checkpoint-{time_now}.pt')
+
+                prev_total_steps = total_steps
+
+    # Save the rewards
+    # if evaluate_num % args.save_freq == 0:
+    #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
+    #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':

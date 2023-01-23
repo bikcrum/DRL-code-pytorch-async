@@ -80,9 +80,9 @@ class PPO_discrete:
             self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a)
             self.optimizer_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr_c)
 
-    def evaluate(self, s):  # When evaluating the policy, we select the action with the highest probability
-        s = torch.unsqueeze(torch.tensor(s, dtype=torch.float), 0)
-        a_prob = self.actor(s).detach().numpy().flatten()
+    def evaluate(self, s, device):  # When evaluating the policy, we select the action with the highest probability
+        s = torch.unsqueeze(torch.tensor(s, dtype=torch.float, device=device), 0)
+        a_prob = self.actor(s).detach().cpu().numpy().flatten()
         a = np.argmax(a_prob)
         return a
 
@@ -94,8 +94,10 @@ class PPO_discrete:
             a_logprob = dist.log_prob(a)
         return a.numpy()[0], a_logprob.numpy()[0]
 
-    def update(self, replay_buffer, total_steps):
-        s, a, a_logprob, r, s_, dw, done = replay_buffer.numpy_to_tensor()  # Get training data
+    def update(self, replay_buffer, total_steps, device):
+        self.actor.to(device)
+        self.critic.to(device)
+        s, a, a_logprob, r, s_, dw, done = replay_buffer.numpy_to_tensor(device=device)  # Get training data
         """
             Calculate the advantage using GAE
             'dw=True' means dead or win, there is no next state s'
@@ -107,14 +109,15 @@ class PPO_discrete:
             vs = self.critic(s)
             vs_ = self.critic(s_)
             deltas = r + self.gamma * (1.0 - dw) * vs_ - vs
-            for delta, d in zip(reversed(deltas.flatten().numpy()), reversed(done.flatten().numpy())):
+            for delta, d in zip(reversed(deltas.flatten()), reversed(done.flatten())):
                 gae = delta + self.gamma * self.lamda * gae * (1.0 - d)
                 adv.insert(0, gae)
-            adv = torch.tensor(adv, dtype=torch.float).view(-1, 1)
+            adv = torch.tensor(adv, dtype=torch.float, device=device).view(-1, 1)
             v_target = adv + vs
             if self.use_adv_norm:  # Trick 1:advantage normalization
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
 
+        lossess = []
         # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
             # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
@@ -130,7 +133,8 @@ class PPO_discrete:
                 actor_loss = -torch.min(surr1, surr2) - self.entropy_coef * dist_entropy  # shape(mini_batch_size X 1)
                 # Update actor
                 self.optimizer_actor.zero_grad()
-                actor_loss.mean().backward()
+                actor_loss = actor_loss.mean()
+                actor_loss.backward()
                 if self.use_grad_clip:  # Trick 7: Gradient clip
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                 self.optimizer_actor.step()
@@ -144,8 +148,13 @@ class PPO_discrete:
                     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.optimizer_critic.step()
 
+                lossess.append((actor_loss.item(), critic_loss.item()))
+
         if self.use_lr_decay:  # Trick 6:learning rate Decay
             self.lr_decay(total_steps)
+
+        a_loss, c_loss = zip(*lossess)
+        return np.mean(a_loss), np.mean(c_loss)
 
     def lr_decay(self, total_steps):
         lr_a_now = self.lr_a * (1 - total_steps / self.max_train_steps)

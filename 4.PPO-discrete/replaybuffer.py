@@ -22,14 +22,34 @@ class ReplayBuffer:
         self.dw[self.count] = dw
         self.done[self.count] = done
         self.count += 1
+    # def __init__(self, args):
+    #     self.s = []
+    #     self.a = []
+    #     self.a_logprob = []
+    #     self.r = []
+    #     self.s_ = []
+    #     self.dw = []
+    #     self.done = []
+    #     # self.count = 0
+    #
+    # def store(self, s, a, a_logprob, r, s_, dw, done):
+    #     self.s.append(s)
+    #     self.a.append(a)
+    #     self.a_logprob.append(a_logprob)
+    #     self.r.append(r)
+    #     self.s_.append(s_)
+    #     self.dw.append(dw)
+    #     self.done.append(done)
+    #     # self.count += 1
 
-    def numpy_to_tensor(self):
-        s = torch.tensor(self.s, dtype=torch.float)
-        a = torch.tensor(self.a, dtype=torch.long)  # In discrete action space, 'a' needs to be torch.long
-        a_logprob = torch.tensor(self.a_logprob, dtype=torch.float)
-        r = torch.tensor(self.r, dtype=torch.float)
-        s_ = torch.tensor(self.s_, dtype=torch.float)
-        dw = torch.tensor(self.dw, dtype=torch.float)
-        done = torch.tensor(self.done, dtype=torch.float)
+    def numpy_to_tensor(self, device):
+        s = torch.tensor(self.s, dtype=torch.float, device=device)
+        a = torch.tensor(self.a, dtype=torch.float,
+                         device=device)  # In discrete action space, 'a' needs to be torch.long
+        a_logprob = torch.tensor(self.a_logprob, dtype=torch.float, device=device)
+        r = torch.tensor(self.r, dtype=torch.float, device=device)
+        s_ = torch.tensor(self.s_, dtype=torch.float, device=device)
+        dw = torch.tensor(self.dw, dtype=torch.float, device=device)
+        done = torch.tensor(self.done, dtype=torch.float, device=device)
 
         return s, a, a_logprob, r, s_, dw, done

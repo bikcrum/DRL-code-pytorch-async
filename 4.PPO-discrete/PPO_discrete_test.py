@@ -21,7 +21,7 @@ def evaluate_policy(args, env, agent, state_norm):
         done = False
         episode_reward = 0
         while not done:
-            a = agent.evaluate(s)  # We use the deterministic policy during the evaluating
+            a = agent.evaluate(s, device=torch.device('cpu'))  # We use the deterministic policy during the evaluating
             s_, r, done, _ = env.step(a)
             if args.use_state_norm:
                 s_ = state_norm(s_, update=False)
@@ -56,7 +56,8 @@ def main(args, env_name, number, seed):
 
     agent = PPO_discrete(args)
 
-    agent.actor.load_state_dict(torch.load('agent.pth'))
+    agent.actor.load_state_dict(
+        torch.load('saved_models/agent-2023-01-23 01:59:27.212059.pth', map_location=torch.device('cpu')))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
