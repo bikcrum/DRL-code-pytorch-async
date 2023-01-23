@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import logging
 
 import gym
 import numpy as np
@@ -7,6 +8,8 @@ import torch
 
 from normalization import Normalization, RewardScaling
 from ppo_discrete import PPO_discrete
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def evaluate_policy(args, env, agent, state_norm):

@@ -123,7 +123,6 @@ def main(args, env_name, number, seed):
             # When the number of transitions in buffer reaches batch_size,then update
             if replay_buffer.count == args.batch_size:
                 actor_loss, critic_loss = agent.update(replay_buffer, total_steps, device=torch.device('cpu'))
-                print(f'actor_loss:{actor_loss}, critic_loss:{critic_loss}')
 
                 log = {'actor_loss': actor_loss,
                        'critic_loss': critic_loss,
