@@ -1,0 +1,9 @@
+.idea
+__pycache__
+*.pth
+*.npy
+*.sh
+runs
+saved_models
+checkpoints
+wandb
