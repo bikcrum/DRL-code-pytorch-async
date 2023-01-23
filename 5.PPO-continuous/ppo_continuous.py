@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
@@ -53,7 +54,8 @@ class Actor_Gaussian(nn.Module):
         self.fc1 = nn.Linear(args.state_dim, args.hidden_width)
         self.fc2 = nn.Linear(args.hidden_width, args.hidden_width)
         self.mean_layer = nn.Linear(args.hidden_width, args.action_dim)
-        self.log_std = nn.Parameter(torch.zeros(1, args.action_dim))  # We use 'nn.Parameter' to train log_std automatically
+        self.log_std = nn.Parameter(
+            torch.zeros(1, args.action_dim))  # We use 'nn.Parameter' to train log_std automatically
         self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
 
         if args.use_orthogonal_init:
@@ -129,12 +131,12 @@ class PPO_continuous():
             self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a)
             self.optimizer_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr_c)
 
-    def evaluate(self, s):  # When evaluating the policy, we only use the mean
-        s = torch.unsqueeze(torch.tensor(s, dtype=torch.float), 0)
+    def evaluate(self, s, device):  # When evaluating the policy, we only use the mean
+        s = torch.unsqueeze(torch.tensor(s, dtype=torch.float, device=device), 0)
         if self.policy_dist == "Beta":
-            a = self.actor.mean(s).detach().numpy().flatten()
+            a = self.actor.mean(s).detach().cpu().numpy().flatten()
         else:
-            a = self.actor(s).detach().numpy().flatten()
+            a = self.actor(s).detach().cpu().numpy().flatten()
         return a
 
     def choose_action(self, s):
@@ -152,8 +154,10 @@ class PPO_continuous():
                 a_logprob = dist.log_prob(a)  # The log probability density of the action
         return a.numpy().flatten(), a_logprob.numpy().flatten()
 
-    def update(self, replay_buffer, total_steps):
-        s, a, a_logprob, r, s_, dw, done = replay_buffer.numpy_to_tensor()  # Get training data
+    def update(self, replay_buffer, total_steps, device):
+        self.actor = self.actor.to(device)
+        self.critic = self.critic.to(device)
+        s, a, a_logprob, r, s_, dw, done = replay_buffer.numpy_to_tensor(device=device)  # Get training data
         """
             Calculate the advantage using GAE
             'dw=True' means dead or win, there is no next state s'
@@ -165,14 +169,15 @@ class PPO_continuous():
             vs = self.critic(s)
             vs_ = self.critic(s_)
             deltas = r + self.gamma * (1.0 - dw) * vs_ - vs
-            for delta, d in zip(reversed(deltas.flatten().numpy()), reversed(done.flatten().numpy())):
+            for delta, d in zip(reversed(deltas.flatten()), reversed(done.flatten())):
                 gae = delta + self.gamma * self.lamda * gae * (1.0 - d)
                 adv.insert(0, gae)
-            adv = torch.tensor(adv, dtype=torch.float).view(-1, 1)
+            adv = torch.tensor(adv, dtype=torch.float, device=device).view(-1, 1)
             v_target = adv + vs
             if self.use_adv_norm:  # Trick 1:advantage normalization
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
 
+        losses = []
         # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
             # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
@@ -181,14 +186,16 @@ class PPO_continuous():
                 dist_entropy = dist_now.entropy().sum(1, keepdim=True)  # shape(mini_batch_size X 1)
                 a_logprob_now = dist_now.log_prob(a[index])
                 # a/b=exp(log(a)-log(b))  In multi-dimensional continuous action space，we need to sum up the log_prob
-                ratios = torch.exp(a_logprob_now.sum(1, keepdim=True) - a_logprob[index].sum(1, keepdim=True))  # shape(mini_batch_size X 1)
+                ratios = torch.exp(a_logprob_now.sum(1, keepdim=True) - a_logprob[index].sum(1,
+                                                                                             keepdim=True))  # shape(mini_batch_size X 1)
 
                 surr1 = ratios * adv[index]  # Only calculate the gradient of 'a_logprob_now' in ratios
                 surr2 = torch.clamp(ratios, 1 - self.epsilon, 1 + self.epsilon) * adv[index]
                 actor_loss = -torch.min(surr1, surr2) - self.entropy_coef * dist_entropy  # Trick 5: policy entropy
                 # Update actor
                 self.optimizer_actor.zero_grad()
-                actor_loss.mean().backward()
+                actor_loss = actor_loss.mean()
+                actor_loss.backward()
                 if self.use_grad_clip:  # Trick 7: Gradient clip
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                 self.optimizer_actor.step()
@@ -202,8 +209,13 @@ class PPO_continuous():
                     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.optimizer_critic.step()
 
+                losses.append((actor_loss.item(), critic_loss.item()))
+
         if self.use_lr_decay:  # Trick 6:learning rate Decay
             self.lr_decay(total_steps)
+
+        a_loss, c_loss = zip(*losses)
+        return np.mean(a_loss), np.mean(c_loss)
 
     def lr_decay(self, total_steps):
         lr_a_now = self.lr_a * (1 - total_steps / self.max_train_steps)

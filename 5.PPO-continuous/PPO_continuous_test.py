@@ -1,3 +1,4 @@
+import logging
 import time
 
 import torch
@@ -8,6 +9,8 @@ import argparse
 from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
 from ppo_continuous import PPO_continuous
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def evaluate_policy(args, env, agent, state_norm):
@@ -64,10 +67,11 @@ def main(args, env_name, number, seed):
 
     replay_buffer = ReplayBuffer(args)
     agent = PPO_continuous(args)
-    agent.actor.load_state_dict(torch.load(f'actor-1673598055.8059468.pth'))
+    agent.actor.load_state_dict(torch.load(f'saved_models/agent-2023-01-23 02:52:37.711714.pth', map_location=torch.device('cpu')))
 
     # Build a tensorboard
-    writer = SummaryWriter(log_dir='runs/PPO_continuous/env_{}_{}_number_{}_seed_{}'.format(env_name, args.policy_dist, number, seed))
+    writer = SummaryWriter(
+        log_dir='runs/PPO_continuous/env_{}_{}_number_{}_seed_{}'.format(env_name, args.policy_dist, number, seed))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -128,18 +132,23 @@ def main(args, env_name, number, seed):
                 writer.add_scalar('step_rewards_{}'.format(env_name), evaluate_rewards[-1], global_step=total_steps)
                 # Save the rewards
                 if evaluate_num % args.save_freq == 0:
-                    np.save('./data_train/PPO_continuous_{}_env_{}_number_{}_seed_{}.npy'.format(args.policy_dist, env_name, number, seed), np.array(evaluate_rewards))
+                    np.save(
+                        './data_train/PPO_continuous_{}_env_{}_number_{}_seed_{}.npy'.format(args.policy_dist, env_name,
+                                                                                             number, seed),
+                        np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameters Setting for PPO-continuous")
     parser.add_argument("--max_train_steps", type=int, default=int(3e6), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
+    parser.add_argument("--evaluate_freq", type=float, default=5e3,
+                        help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=64, help="Minibatch size")
-    parser.add_argument("--hidden_width", type=int, default=64, help="The number of neurons in hidden layers of the neural network")
+    parser.add_argument("--hidden_width", type=int, default=64,
+                        help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
