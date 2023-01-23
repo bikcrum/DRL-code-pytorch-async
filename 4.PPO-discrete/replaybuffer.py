@@ -1,5 +1,5 @@
-import torch
 import numpy as np
+import torch
 
 
 class ReplayBuffer:
@@ -22,25 +22,6 @@ class ReplayBuffer:
         self.dw[self.count] = dw
         self.done[self.count] = done
         self.count += 1
-    # def __init__(self, args):
-    #     self.s = []
-    #     self.a = []
-    #     self.a_logprob = []
-    #     self.r = []
-    #     self.s_ = []
-    #     self.dw = []
-    #     self.done = []
-    #     # self.count = 0
-    #
-    # def store(self, s, a, a_logprob, r, s_, dw, done):
-    #     self.s.append(s)
-    #     self.a.append(a)
-    #     self.a_logprob.append(a_logprob)
-    #     self.r.append(r)
-    #     self.s_.append(s_)
-    #     self.dw.append(dw)
-    #     self.done.append(done)
-    #     # self.count += 1
 
     def numpy_to_tensor(self, device):
         s = torch.tensor(self.s, dtype=torch.float, device=device)

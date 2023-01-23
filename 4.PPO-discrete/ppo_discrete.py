@@ -117,7 +117,7 @@ class PPO_discrete:
             if self.use_adv_norm:  # Trick 1:advantage normalization
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
 
-        lossess = []
+        losses = []
         # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
             # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
@@ -148,12 +148,12 @@ class PPO_discrete:
                     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.optimizer_critic.step()
 
-                lossess.append((actor_loss.item(), critic_loss.item()))
+                losses.append((actor_loss.item(), critic_loss.item()))
 
         if self.use_lr_decay:  # Trick 6:learning rate Decay
             self.lr_decay(total_steps)
 
-        a_loss, c_loss = zip(*lossess)
+        a_loss, c_loss = zip(*losses)
         return np.mean(a_loss), np.mean(c_loss)
 
     def lr_decay(self, total_steps):

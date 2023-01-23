@@ -1,13 +1,11 @@
+import argparse
 import datetime
 
-import torch
-import numpy as np
-import tqdm
-from torch.utils.tensorboard import SummaryWriter
 import gym
-import argparse
+import numpy as np
+import torch
+
 from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
 
 

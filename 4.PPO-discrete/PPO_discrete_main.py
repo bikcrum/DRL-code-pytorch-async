@@ -1,18 +1,17 @@
+import argparse
 import datetime
 import logging
 import os
 
-import torch
-import numpy as np
-import tqdm
-from torch.utils.tensorboard import SummaryWriter
 import gym
-import argparse
-from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
-from ppo_discrete import PPO_discrete
+import numpy as np
+import torch
+import tqdm
 
 import wandb
+from normalization import Normalization, RewardScaling
+from ppo_discrete import PPO_discrete
+from replaybuffer import ReplayBuffer
 
 
 def evaluate_policy(args, env, agent, state_norm, device):
@@ -61,23 +60,17 @@ def main(args, env_name, number, seed):
     print("action_dim={}".format(args.action_dim))
     print("max_episode_steps={}".format(args.max_episode_steps))
 
-    evaluate_num = 0  # Record the number of evaluations
-    evaluate_rewards = []  # Record the rewards during the evaluating
     total_steps = 0  # Record the total steps during the training
 
     replay_buffer = ReplayBuffer(args)
     agent = PPO_discrete(args)
 
-    run = wandb.init(
+    wandb.init(
         entity='team-osu',
         project=f'toy-test-{env_name}',
         name=str(time_now),
         config=args.__dict__
     )
-
-    # Build a tensorboard
-    # writer = SummaryWriter(
-    #     log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -166,11 +159,6 @@ def main(args, env_name, number, seed):
                 }, f'checkpoints/checkpoint-{time_now}.pt')
 
                 prev_total_steps = total_steps
-
-    # Save the rewards
-    # if evaluate_num % args.save_freq == 0:
-    #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-    #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':

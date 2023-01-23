@@ -1,21 +1,20 @@
+import argparse
 import datetime
 import logging
 import os
-import time
+from copy import deepcopy
 
-import torch
+import gym
 import numpy as np
+import ray
+import torch
 import tqdm
 from torch.distributions import Categorical
 
 import wandb
-import gym
-import argparse
 from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
 from ppo_discrete import PPO_discrete
-import ray
-from copy import deepcopy
+from replaybuffer import ReplayBuffer
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -94,12 +93,6 @@ def collector(env, state_norm, reward_scaling, actor, reward_norm, batch_size, a
             if curr_buf_size > args.batch_size:
                 break
 
-            # if curr_buf_size > batch_size:
-            # if len(rewards) == 0:
-            #     return replay_buffer, episode_reward, episode_steps
-            # else:
-            # return replay_buffer, np.mean(rewards), np.mean(lengths)
-
             replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
             s = s_
 
@@ -152,15 +145,12 @@ def main(args, env_name, number, seed):
     # dev_inf, dev_optim = torch.device('cpu'), torch.device('cpu')
     dev_inf, dev_optim = get_device()
 
-    run = wandb.init(
+    wandb.init(
         entity='team-osu',
         project=f'toy-test-{env_name}',
         name=str(time_now),
         config=args.__dict__
     )
-    # Build a tensorboard
-    # writer = SummaryWriter(
-    #     log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}_time_{}'.format(env_name, number, seed, str(time_now)))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     reward_scaling = None
@@ -184,58 +174,12 @@ def main(args, env_name, number, seed):
     while total_steps < args.max_train_steps:
         actor = agent.actor.to(dev_inf)
 
-
-        # s = env.reset()
-        # if args.use_state_norm:
-        #     s = state_norm(s)
-        # if args.use_reward_scaling:
-        #     reward_scaling.reset()
-        # episode_steps = 0
-        # done = False
-        # while not done:
-        #     episode_steps += 1
-        #     a, a_logprob = agent.choose_action(s)  # Action and the corresponding log probability
-        #     s_, r, done, _ = env.step(a)
-        #
-        #     if args.use_state_norm:
-        #         s_ = state_norm(s_)
-        #     if args.use_reward_norm:
-        #         r = reward_norm(r)
-        #     elif args.use_reward_scaling:
-        #         r = reward_scaling(r)
-        #
-        #     # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
-        #     # dw means dead or win,there is no next state s';
-        #     # but when reaching the max_episode_steps,there is a next state s' actually.
-        #     if done and episode_steps != args.max_episode_steps:
-        #         dw = True
-        #     else:
-        #         dw = False
-        #
-        #     replay_buffer.store(s, a, a_logprob, r, s_, dw, done)
-        #     s = s_
-        #     total_steps += 1
-        #     pbar.update(1)
-
-        # When the number of transitions in buffer reaches batch_size,then update
-
-        # replay_buffer_1 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
-        # replay_buffer_2 = collector(env, state_norm, reward_scaling, agent, reward_norm, _args.batch_size, _args)
         logging.info("Collecting data")
 
         replay_buffers = ray.get(
             [collector.remote(env, state_norm, reward_scaling, actor, reward_norm, _args.batch_size, _args,
                               dev_inf) for _
              in range(n_workers)])
-
-        # replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
-        # replay_buffer.r = np.vstack([rf.r for rf in replay_buffers])
-        # replay_buffer.a = np.vstack([rf.a for rf in replay_buffers])
-        # replay_buffer.done = np.vstack([rf.done for rf in replay_buffers])
-        # replay_buffer.a_logprob = np.vstack([rf.a_logprob for rf in replay_buffers])
-        # replay_buffer.dw = np.vstack([rf.dw for rf in replay_buffers])
-        # replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
-        # replay_buffer.count = np.sum([rf.count for rf in replay_buffers])
 
         replay_buffer.s = np.vstack([rf.s for rf in replay_buffers])
         replay_buffer.r = np.vstack([rf.r for rf in replay_buffers])
@@ -245,8 +189,6 @@ def main(args, env_name, number, seed):
         replay_buffer.dw = np.vstack([rf.dw for rf in replay_buffers])
         replay_buffer.s_ = np.vstack([rf.s_ for rf in replay_buffers])
         replay_buffer.count = np.sum([len(rf.a) for rf in replay_buffers])
-
-        # assert replay_buffer.count == args.batch_size
 
         total_steps += replay_buffer.count
         pbar.update(replay_buffer.count)
@@ -288,11 +230,6 @@ def main(args, env_name, number, seed):
             }, f'checkpoints/checkpoint-{time_now}.pt')
 
             prev_total_steps = total_steps
-
-    # Save the rewards
-    # if evaluate_num % args.save_freq == 0:
-    #     np.save('./data_train/PPO_discrete_env_{}_number_{}_seed_{}.npy'.format(env_name, number, seed),
-    #             np.array(evaluate_rewards))
 
 
 if __name__ == '__main__':
