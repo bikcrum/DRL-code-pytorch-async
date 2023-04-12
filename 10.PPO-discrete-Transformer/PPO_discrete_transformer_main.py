@@ -51,7 +51,7 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             # logging.info('Evaluating')
