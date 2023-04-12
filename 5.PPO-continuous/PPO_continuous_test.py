@@ -1,14 +1,14 @@
+import argparse
 import logging
 import time
 
-import torch
-import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import gym
-import argparse
+import numpy as np
+import torch
+
 from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
 from ppo_continuous import PPO_continuous
+from replaybuffer import ReplayBuffer
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -69,7 +69,7 @@ def main(args, env_name, number, seed):
     replay_buffer = ReplayBuffer(args)
     agent = PPO_continuous(args)
     agent.actor.load_state_dict(
-        torch.load(f'saved_models/agent-2023-01-23 02:52:37.711714.pth', map_location=torch.device('cpu')))
+        torch.load(f'/nfs/stak/users/panditb/workspace/roadrunner/saved_models/agent-2023-03-17 02:02:38.086131.pth', map_location=torch.device('cpu')))
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
     if args.use_reward_norm:  # Trick 3:reward normalization
@@ -113,5 +113,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_name = ['BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
-    env_index = 1
+    env_index = 0
     main(args, env_name=env_name[env_index], number=1, seed=10)

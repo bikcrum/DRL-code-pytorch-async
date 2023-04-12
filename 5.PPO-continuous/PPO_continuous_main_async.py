@@ -38,6 +38,7 @@ def evaluate_policy(args, env, agent, state_norm, device):
             else:
                 action = a
             s_, r, done, _ = env.step(action)
+            # env.render()
             if args.use_state_norm:
                 s_ = state_norm(s_, update=False)
             episode_reward += r
@@ -87,6 +88,7 @@ def collector(env, state_norm, reward_scaling, actor, reward_norm, batch_size, a
             else:
                 action = a
             s_, r, done, _ = env.step(action)
+            # env.render()
 
             if args.use_state_norm:
                 s_ = state_norm(s_)
@@ -281,6 +283,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_name = ['BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
-    env_index = 1
+    env_name = ['Pendulum-v1', 'BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
+    env_index = 0
     main(args, env_name=env_name[env_index], number=1, seed=10)
