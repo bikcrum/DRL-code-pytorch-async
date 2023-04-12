@@ -68,13 +68,16 @@ class ReplayBuffer:
                 adv = ((adv - np.nanmean(adv_copy)) / (np.nanstd(adv_copy) + 1e-5))
         return adv, v_target
 
-    def get_training_data(self):
+    def get_training_data(self, device):
         adv, v_target = self.get_adv()
-        batch = {'s': torch.tensor(self.buffer['s'][:, :self.max_episode_len], dtype=torch.float32),
-                 'a': torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.long),  # 动作a的类型必须是long
-                 'a_logprob': torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float32),
-                 'active': torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32),
-                 'adv': torch.tensor(adv, dtype=torch.float32),
-                 'v_target': torch.tensor(v_target, dtype=torch.float32)}
+        batch = {'s': torch.tensor(self.buffer['s'][:, :self.max_episode_len], dtype=torch.float32, device=device),
+                 'a': torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.long, device=device),
+                 # 动作a的类型必须是long
+                 'a_logprob': torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float32,
+                                           device=device),
+                 'active': torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32,
+                                        device=device),
+                 'adv': torch.tensor(adv, dtype=torch.float32, device=device),
+                 'v_target': torch.tensor(v_target, dtype=torch.float32, device=device)}
 
         return batch
