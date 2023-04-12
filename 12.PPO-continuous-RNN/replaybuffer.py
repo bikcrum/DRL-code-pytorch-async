@@ -20,10 +20,11 @@ class ReplayBuffer:
     def reset_buffer(self):
         self.buffer = {'s': np.zeros([self.batch_size, self.episode_limit, self.state_dim]),
                        'v': np.zeros([self.batch_size, self.episode_limit + 1]),
-                       'a': np.zeros([self.batch_size, self.episode_limit]),
-                       'a_logprob': np.zeros([self.batch_size, self.episode_limit]),
+                       'a': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
+                       'a_logprob': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
                        'r': np.zeros([self.batch_size, self.episode_limit]),
-                       'dw': np.ones([self.batch_size, self.episode_limit]),  # Note: We use 'np.ones' to initialize 'dw'
+                       'dw': np.ones([self.batch_size, self.episode_limit]),
+                       # Note: We use 'np.ones' to initialize 'dw'
                        'active': np.zeros([self.batch_size, self.episode_limit])
                        }
         self.episode_num = 0
@@ -68,13 +69,16 @@ class ReplayBuffer:
                 adv = ((adv - np.nanmean(adv_copy)) / (np.nanstd(adv_copy) + 1e-5))
         return adv, v_target
 
-    def get_training_data(self):
+    def get_training_data(self, device):
         adv, v_target = self.get_adv()
-        batch = {'s': torch.tensor(self.buffer['s'][:, :self.max_episode_len], dtype=torch.float32),
-                 'a': torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.long),  # 动作a的类型必须是long
-                 'a_logprob': torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float32),
-                 'active': torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32),
-                 'adv': torch.tensor(adv, dtype=torch.float32),
-                 'v_target': torch.tensor(v_target, dtype=torch.float32)}
+        batch = {'s': torch.tensor(self.buffer['s'][:, :self.max_episode_len], dtype=torch.float, device=device),
+                 'a': torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.float, device=device),
+                 # 动作a的类型必须是long
+                 'a_logprob': torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float,
+                                           device=device),
+                 'active': torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float,
+                                        device=device),
+                 'adv': torch.tensor(adv, dtype=torch.float, device=device),
+                 'v_target': torch.tensor(v_target, dtype=torch.float, device=device)}
 
         return batch

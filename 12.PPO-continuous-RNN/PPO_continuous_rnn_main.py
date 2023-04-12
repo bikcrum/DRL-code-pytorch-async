@@ -1,11 +1,14 @@
+import logging
+
 import torch
 import numpy as np
+import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import gym
 import argparse
 from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
-from ppo_discrete_rnn import PPO_discrete_RNN
+from ppo_continuous_rnn import PPO_continuous_RNN
 
 
 class Runner:
@@ -20,11 +23,12 @@ class Runner:
         # Set random seed
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
-        self.env.seed(seed)
+        # self.env.seed(seed)
         self.env.action_space.seed(seed)
 
         self.args.state_dim = self.env.observation_space.shape[0]
-        self.args.action_dim = self.env.action_space.n
+        self.args.action_dim = self.env.action_space.shape[0]
+        args.max_action = float(self.env.action_space.high[0])
         self.args.episode_limit = self.env._max_episode_steps  # Maximum number of steps per episode
         print("env={}".format(env_name))
         print("state_dim={}".format(args.state_dim))
@@ -32,7 +36,7 @@ class Runner:
         print("episode_limit={}".format(args.episode_limit))
 
         self.replay_buffer = ReplayBuffer(args)
-        self.agent = PPO_discrete_RNN(args)
+        self.agent = PPO_continuous_RNN(args)
 
         # Create a tensorboard
         self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
@@ -48,17 +52,25 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
+        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             if self.total_steps // self.args.evaluate_freq > evaluate_num:
+                logging.info('Evaluating the policy ...')
                 self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
                 evaluate_num += 1
 
+            logging.info('Collecting experience ...')
             _, episode_steps = self.run_episode()  # Run an episode
             self.total_steps += episode_steps
 
             if self.replay_buffer.episode_num == self.args.batch_size:
-                self.agent.train(self.replay_buffer, self.total_steps)  # Training
+                logging.info('Training the policy ...')
+                actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps, device_optim)  # Training
+                self.agent.actor = self.agent.actor.to(device_collector)
+                self.agent.critic = self.agent.critic.to(device_collector)
+                logging.info('total_steps:{} \t actor_loss:{} \t critic_loss:{}'.format(self.total_steps, actor_loss,
+                                                                                        critic_loss))
                 self.replay_buffer.reset_buffer()
 
         self.evaluate_policy()
@@ -70,12 +82,12 @@ class Runner:
         if self.args.use_reward_scaling:
             self.reward_scaling.reset()
         self.agent.reset_rnn_hidden()
-        for episode_step in range(self.args.episode_limit):
+        for episode_step in tqdm.tqdm(range(self.args.episode_limit)):
             if self.args.use_state_norm:
                 s = self.state_norm(s)
             a, a_logprob = self.agent.choose_action(s, evaluate=False)
             v = self.agent.get_value(s)
-            s_, r, done, _ = self.env.step(a)
+            s_, r, done, _ = self.env.step(a.detach().numpy().flatten() * self.args.max_action)
             episode_reward += r
 
             if done and episode_step + 1 != self.args.episode_limit:
@@ -108,7 +120,7 @@ class Runner:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
-                s_, r, done, _ = self.env.step(a)
+                s_, r, done, _ = self.env.step(a.detach().numpy().flatten() * self.args.max_action)
                 episode_reward += r
                 s = s_
             evaluate_reward += episode_reward
@@ -116,21 +128,25 @@ class Runner:
         evaluate_reward = evaluate_reward / self.args.evaluate_times
         self.evaluate_rewards.append(evaluate_reward)
         print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
+        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+                               global_step=self.total_steps)
         # Save the rewards and models
-        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed), np.array(self.evaluate_rewards))
+        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
+                np.array(self.evaluate_rewards))
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
-    parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
+    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-continuous-RNN")
+    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
+    parser.add_argument("--evaluate_freq", type=float, default=5e3,
+                        help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--evaluate_times", type=float, default=3, help="Evaluate times")
 
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
-    parser.add_argument("--hidden_dim", type=int, default=64, help="The number of neurons in hidden layers of the neural network")
+    parser.add_argument("--hidden_dim", type=int, default=64,
+                        help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -149,8 +165,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 0
+    env_names = ['Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 1
     for seed in [0, 10, 100]:
         runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
         runner.run()
