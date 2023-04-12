@@ -4,7 +4,8 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
+from torch.nn import functional as F
+from torch.distributions import Categorical, Normal
 from torch.utils.data.sampler import BatchSampler, SequentialSampler
 
 logging.getLogger().setLevel(logging.INFO)
@@ -53,13 +54,15 @@ class Actor_Transformer(nn.Module):
         encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=64, dropout=0.1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
-        self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
+        self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        self.log_std_layer = nn.Linear(args.hidden_dim, args.action_dim)
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
             orthogonal_init(self.actor_fc1)
             # orthogonal_init(self.pos_encoder)
-            orthogonal_init(self.actor_fc2, gain=0.01)
+            orthogonal_init(self.mean_layer, gain=0.01)
+            orthogonal_init(self.log_std_layer, gain=0.01)
             # orthogonal_init(self.critic_fc1)
             # orthogonal_init(self.critic_rnn)
             # orthogonal_init(self.critic_fc2)
@@ -80,13 +83,24 @@ class Actor_Transformer(nn.Module):
         s = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
         # s: [seq_len, batch_size, hidden_dim]
 
-        logit = self.actor_fc2(s)
-        # logit: [seq_len, batch_size, action_dim]
+        logit = s.transpose(0, 1)
+        # logit: [batch_size, seq_len, hidden_dim]
 
-        logit = logit.transpose(0, 1)
-        # logits: [batch_size, seq_len, action_dim]
+        # Tanh because log_std range is [-1, 1]
+        mean = F.tanh(self.mean_layer(logit))
+        # mean: [batch_size, seq_len, action_dim]
 
-        return logit
+        # Tanh because log_std range is [-1, 1]
+        log_std = F.tanh(self.log_std_layer(logit))
+        # log_std: [batch_size, seq_len, action_dim]
+
+        return mean, log_std
+
+    def get_distribution(self, s):
+        mean, log_std = self.forward(s)
+        # Exp to make std positive
+        std = log_std.exp()
+        return Normal(mean, std)
 
 
 class Critic_Transformer(nn.Module):
@@ -183,7 +197,7 @@ class Critic_Transformer(nn.Module):
 #         return value
 
 
-class PPO_discrete_Transformer:
+class PPO_continuous_Transformer:
     def __init__(self, args):
         self.batch_size = args.batch_size
         self.mini_batch_size = args.mini_batch_size
@@ -208,26 +222,45 @@ class PPO_discrete_Transformer:
             self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr, eps=1e-5)
             self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr, eps=1e-5)
         else:
-            pass
-            # self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
+            self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
+            self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
 
     # def reset_rnn_hidden(self):
     #     self.ac.actor_rnn_hidden = None
     #     self.ac.critic_rnn_hidden = None
 
     def choose_action(self, s, evaluate=False):
+
         with torch.no_grad():
-            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
-            # Get output from the last observation
-            logit = self.actor(s)[:, -1]
+            s = torch.tensor(s, dtype=torch.float)
+
+            assert s.dim() == 2, "s must be 2D, [seq_len, state_dim]"
+
+            # Add batch dimension
+            s = s.unsqueeze(0)
+            # s: [1, seq_len, state_dim]
+
             if evaluate:
-                a = torch.argmax(logit)
-                return a.item(), None
+                mean, _ = self.actor(s)
+                # mean: [1, seq_len, action_dim]
+
+                # Get output from last observation
+                mean = mean.squeeze(0)[-1]
+                # mean: [action_dim]
+
+                return mean, None
             else:
-                dist = Categorical(logits=logit)
+                dist = self.actor.get_distribution(s)
                 a = dist.sample()
+                # a: [1, seq_len, action_dim]
+
                 a_logprob = dist.log_prob(a)
-                return a.item(), a_logprob.item()
+                # a_logprob: [1, seq_len, action_dim]
+
+                a, a_logprob = a.squeeze(0)[-1], a_logprob.squeeze(0)[-1]
+                # a: [action_dim], a_logprob: [action_dim]
+
+                return a, a_logprob
 
     def get_value(self, s):
         with torch.no_grad():
@@ -249,16 +282,16 @@ class PPO_discrete_Transformer:
             for index in BatchSampler(SequentialSampler(range(self.batch_size)), self.mini_batch_size, False):
                 # If use RNN, we need to reset the rnn_hidden of the actor and critic.
                 # self.reset_rnn_hidden()
-                logits_now = self.actor(
+                dist_now = self.actor.get_distribution(
                     batch['s'][index])  # logits_now.shape=(mini_batch_size, max_episode_len, action_dim)
                 values_now = self.critic(batch['s'][index]).squeeze(
                     -1)  # values_now.shape=(mini_batch_size, max_episode_len)
 
-                dist_now = Categorical(logits=logits_now)
-                dist_entropy = dist_now.entropy()  # shape(mini_batch_size, max_episode_len)
-                a_logprob_now = dist_now.log_prob(batch['a'][index])  # shape(mini_batch_size, max_episode_len)
+                dist_entropy = dist_now.entropy().sum(-1)  # shape(mini_batch_size, max_episode_len)
+                a_logprob_now = dist_now.log_prob(batch['a'][index]).sum(-1)  # shape(mini_batch_size, max_episode_len)
                 # a/b=exp(log(a)-log(b))
-                ratios = torch.exp(a_logprob_now - batch['a_logprob'][index])  # shape(mini_batch_size, max_episode_len)
+                ratios = torch.exp(
+                    a_logprob_now - batch['a_logprob'][index].sum(-1))  # shape(mini_batch_size, max_episode_len)
 
                 # actor loss
                 surr1 = ratios * batch['adv'][index]
@@ -270,6 +303,7 @@ class PPO_discrete_Transformer:
                 # critic_loss
                 critic_loss = (values_now - batch['v_target'][index]) ** 2
                 critic_loss = (critic_loss * batch['active'][index]).sum() / batch['active'][index].sum()
+                critic_loss = critic_loss * 0.5
 
                 actor_losses.append(actor_loss.item())
                 critic_losses.append(critic_loss.item())
@@ -279,7 +313,7 @@ class PPO_discrete_Transformer:
                 self.optim_critic.zero_grad()
 
                 actor_loss.backward()
-                (critic_loss * 0.5).backward()
+                critic_loss.backward()
                 # loss = actor_loss + critic_loss * 0.5
                 # loss.backward()
                 if self.use_grad_clip:  # Trick 7: Gradient clip

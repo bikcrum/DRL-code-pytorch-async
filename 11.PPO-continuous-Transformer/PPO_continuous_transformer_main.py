@@ -1,13 +1,15 @@
 import argparse
 import collections
+import logging
 
 import gym
 import numpy as np
 import torch
+import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
 from normalization import Normalization, RewardScaling
-from ppo_discrete_transformer import PPO_discrete_Transformer
+from ppo_continuous_transformer import PPO_continuous_Transformer
 from replaybuffer import ReplayBuffer
 
 
@@ -27,7 +29,8 @@ class Runner:
         self.env.action_space.seed(seed)
 
         self.args.state_dim = self.env.observation_space.shape[0]
-        self.args.action_dim = self.env.action_space.n
+        self.args.action_dim = self.env.action_space.shape[0]
+        args.max_action = float(self.env.action_space.high[0])
         self.args.episode_limit = self.env._max_episode_steps  # Maximum number of steps per episode
         print("env={}".format(env_name))
         print("state_dim={}".format(args.state_dim))
@@ -35,10 +38,11 @@ class Runner:
         print("episode_limit={}".format(args.episode_limit))
 
         self.replay_buffer = ReplayBuffer(args)
-        self.agent = PPO_discrete_Transformer(args)
+        self.agent = PPO_continuous_Transformer(args)
 
         # Create a tensorboard
-        self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
+        self.writer = SummaryWriter(
+            log_dir='runs/PPO_continuous/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
 
         self.evaluate_rewards = []  # Record the rewards during the evaluating
         self.total_steps = 0
@@ -51,19 +55,21 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('mps')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             # logging.info('Evaluating')
             if self.total_steps // self.args.evaluate_freq > evaluate_num:
+                logging.info('Evaluating')
                 self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
                 evaluate_num += 1
 
-            # logging.info('Collecting experience')
+            logging.info('Collecting experience')
             _, episode_steps = self.run_episode()  # Run an episode
             self.total_steps += episode_steps
 
             if self.replay_buffer.episode_num == self.args.batch_size:
+                logging.info('Training')
                 actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
                                                            device=device_optim)  # Training
                 print("total_steps:{} \t actor_loss:{} \t critic_loss:{}".format(self.total_steps, actor_loss,
@@ -84,7 +90,7 @@ class Runner:
         state_buffer = collections.deque(maxlen=self.args.episode_limit)
 
         # self.agent.reset_rnn_hidden()
-        for episode_step in range(self.args.episode_limit):
+        for episode_step in tqdm.tqdm(range(self.args.episode_limit)):
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
@@ -95,7 +101,9 @@ class Runner:
 
             a, a_logprob = self.agent.choose_action(state_buffer, evaluate=False)
             v = self.agent.get_value(state_buffer)
-            s_, r, done, _ = self.env.step(a)
+
+            # Range of a is [-1, 1], so we need to multiply max_action to convert it to the real action range
+            s_, r, done, _ = self.env.step(a.flatten().detach().numpy() * self.args.max_action)
             episode_reward += r
 
             if done and episode_step + 1 != self.args.episode_limit:
@@ -139,7 +147,9 @@ class Runner:
                     state_buffer.popleft()
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action(state_buffer, evaluate=True)
-                s_, r, done, _ = self.env.step(a)
+
+                # Range of a is [-1, 1], so we need to multiply max_action to convert it to the real action range
+                s_, r, done, _ = self.env.step(a.flatten().detach().numpy() * self.args.max_action)
                 # self.env.render()
                 episode_reward += r
                 s = s_
@@ -156,8 +166,8 @@ class Runner:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
-    parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
+    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-continuous-Transformer")
+    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
@@ -167,6 +177,7 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
+    parser.add_argument('--transformer_max_len', type=int, default=64, help='max length of transformer')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -185,8 +196,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 0
+    env_names = ['Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 1
     for seed in [0, 10, 100]:
         runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
         runner.run()
