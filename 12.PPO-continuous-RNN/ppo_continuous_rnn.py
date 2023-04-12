@@ -239,7 +239,6 @@ class PPO_continuous_RNN:
                 values_now = self.critic(batch['s'][index]).squeeze(
                     -1)  # values_now.shape=(mini_batch_size, max_episode_len)
 
-                # dist_now = Categorical(logits=logits_now)
                 dist_entropy = dist_now.entropy().sum(-1)  # shape(mini_batch_size, max_episode_len)
                 a_logprob_now = dist_now.log_prob(batch['a'][index]).sum(-1)  # shape(mini_batch_size, max_episode_len)
                 # a/b=exp(log(a)-log(b))
