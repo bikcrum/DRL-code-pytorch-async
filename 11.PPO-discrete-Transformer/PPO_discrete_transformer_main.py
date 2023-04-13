@@ -51,7 +51,7 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             # logging.info('Evaluating')
@@ -88,7 +88,7 @@ class Runner:
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
-            if len(state_buffer) == self.args.episode_limit:
+            if len(state_buffer) == self.args.transformer_max_len:
                 state_buffer.popleft()
 
             state_buffer.append(s)
@@ -114,7 +114,7 @@ class Runner:
         if self.args.use_state_norm:
             s = self.state_norm(s)
 
-        if len(state_buffer) == self.args.episode_limit:
+        if len(state_buffer) == self.args.transformer_max_len:
             state_buffer.popleft()
         state_buffer.append(s)
 
@@ -135,7 +135,7 @@ class Runner:
             while not done:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
-                if len(state_buffer) == self.args.episode_limit:
+                if len(state_buffer) == self.args.transformer_max_len:
                     state_buffer.popleft()
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action(state_buffer, evaluate=True)
@@ -167,6 +167,7 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
+    parser.add_argument('--transformer_max_len', type=int, default=20, help='max length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")

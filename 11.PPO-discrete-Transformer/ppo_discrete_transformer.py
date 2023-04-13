@@ -199,6 +199,8 @@ class PPO_discrete_Transformer:
         self.use_lr_decay = args.use_lr_decay
         self.use_adv_norm = args.use_adv_norm
 
+        self.transformer_max_len = args.transformer_max_len
+
         # self.ac = Actor_Critic_Transformer(args)
 
         self.actor = Actor_Transformer(args)
@@ -239,14 +241,21 @@ class PPO_discrete_Transformer:
         self.actor = self.actor.to(device)
         self.critic = self.critic.to(device)
 
-        batch = replay_buffer.get_training_data(device=device)  # Get training data
+        batch = replay_buffer.get_training_data_fixed_length(device=device,
+                                                             target_len=self.transformer_max_len)  # Get training data
 
         # Optimize policy for K epochs:
         actor_losses = []
         critic_losses = []
 
+        new_batch_size = batch['s'].size(0)
+        new_mini_batch_size = int(self.mini_batch_size * new_batch_size / self.batch_size)
+
+        logging.info('New batch size: {}'.format(new_batch_size))
+        logging.info('New mini batch size: {}'.format(new_mini_batch_size))
+
         for _ in range(self.K_epochs):
-            for index in BatchSampler(SequentialSampler(range(self.batch_size)), self.mini_batch_size, False):
+            for index in BatchSampler(SequentialSampler(range(new_batch_size)), new_mini_batch_size, False):
                 # If use RNN, we need to reset the rnn_hidden of the actor and critic.
                 # self.reset_rnn_hidden()
                 logits_now = self.actor(
