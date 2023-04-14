@@ -1,10 +1,12 @@
 import argparse
 import collections
+import datetime
+import logging
 
 import gym
 import numpy as np
 import torch
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 from normalization import Normalization, RewardScaling
 from ppo_discrete_transformer import PPO_discrete_Transformer
@@ -37,9 +39,6 @@ class Runner:
         self.replay_buffer = ReplayBuffer(args)
         self.agent = PPO_discrete_Transformer(args)
 
-        # Create a tensorboard
-        self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
-
         self.evaluate_rewards = []  # Record the rewards during the evaluating
         self.total_steps = 0
 
@@ -52,22 +51,62 @@ class Runner:
 
     def run(self, ):
         device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
+
+        time_now = datetime.datetime.now()
+
+        wandb.init(
+            entity='team-osu',
+            project=f'toy-test-{self.env_name}',
+            name=str(time_now),
+            config=args.__dict__
+        )
+
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             # logging.info('Evaluating')
             if self.total_steps // self.args.evaluate_freq > evaluate_num:
-                self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                ep_reward, ep_len = self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
                 evaluate_num += 1
 
+                log = {
+                    "episode_reward_eval": ep_reward,
+                    "episode_length_eval": ep_len,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                }
+
+                logging.info(log)
+
+                wandb.log(log, step=self.total_steps)
+
             # logging.info('Collecting experience')
-            _, episode_steps = self.run_episode()  # Run an episode
-            self.total_steps += episode_steps
+            ep_reward, ep_len = self.run_episode()  # Run an episode
+            self.total_steps += ep_len
+
+            log = {
+                "episode_reward": ep_reward,
+                "episode_length": ep_len,
+                "total_steps": self.total_steps,
+                "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+            }
+            logging.info(log)
+
+            wandb.log(log, step=self.total_steps)
 
             if self.replay_buffer.episode_num == self.args.batch_size:
                 actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
                                                            device=device_optim)  # Training
-                print("total_steps:{} \t actor_loss:{} \t critic_loss:{}".format(self.total_steps, actor_loss,
-                                                                                 critic_loss))
+
+                log = {
+                    "actor_loss": actor_loss,
+                    "critic_loss": critic_loss,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                }
+                logging.info(log)
+
+                wandb.log(log, step=self.total_steps)
+
                 self.replay_buffer.reset_buffer()
                 self.agent.actor = self.agent.actor.to(device_collector)
                 self.agent.critic = self.agent.critic.to(device_collector)
@@ -125,8 +164,9 @@ class Runner:
 
     def evaluate_policy(self):
         evaluate_reward = 0
+        evaluate_length = 0
         for _ in range(self.args.evaluate_times):
-            episode_reward, done = 0, False
+            episode_reward, episode_length, done = 0, 0, False
             s = self.env.reset()
             # self.agent.reset_rnn_hidden()
 
@@ -144,19 +184,23 @@ class Runner:
                 episode_reward += r
                 s = s_
             evaluate_reward += episode_reward
+            evaluate_length += episode_length
 
         evaluate_reward = evaluate_reward / self.args.evaluate_times
-        self.evaluate_rewards.append(evaluate_reward)
-        print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
-                               global_step=self.total_steps)
-        # Save the rewards and models
-        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
-                np.array(self.evaluate_rewards))
+        evaluate_length = evaluate_length / self.args.evaluate_times
+        # self.evaluate_rewards.append(evaluate_reward)
+        # print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+        #                        global_step=self.total_steps)
+        # # Save the rewards and models
+        # np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
+        #         np.array(self.evaluate_rewards))
+
+        return evaluate_reward, evaluate_length
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
+    parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete-transformer")
     parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
@@ -175,7 +219,7 @@ if __name__ == '__main__':
     parser.add_argument("--K_epochs", type=int, default=15, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
-    parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
+    parser.add_argument("--use_reward_scaling", type=bool, default=False, help="Trick 4:reward scaling")
     parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
     parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
     parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
@@ -188,6 +232,6 @@ if __name__ == '__main__':
 
     env_names = ['CartPole-v1', 'LunarLander-v2']
     env_index = 0
-    for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
-        runner.run()
+    seed = 0
+    runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
+    runner.run()
