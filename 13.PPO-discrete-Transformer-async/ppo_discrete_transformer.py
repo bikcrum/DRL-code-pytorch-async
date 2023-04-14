@@ -4,6 +4,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import wandb
 from torch.distributions import Categorical
 from torch.utils.data.sampler import BatchSampler, SequentialSampler
 
@@ -251,8 +252,11 @@ class PPO_discrete_Transformer:
         new_batch_size = batch['s'].size(0)
         new_mini_batch_size = int(self.mini_batch_size * new_batch_size / self.batch_size)
 
-        logging.info('New batch size: {}'.format(new_batch_size))
-        logging.info('New mini batch size: {}'.format(new_mini_batch_size))
+        log = {'new_batch_size': new_batch_size, 'new_mini_batch_size': new_mini_batch_size}
+
+        logging.info(log)
+
+        wandb.log(log, step=total_steps)
 
         for _ in range(self.K_epochs):
             for index in BatchSampler(SequentialSampler(range(new_batch_size)), new_mini_batch_size, False):
@@ -308,17 +312,3 @@ class PPO_discrete_Transformer:
             p['lr'] = lr_now
         for p in self.optim_critic.param_groups:
             p['lr'] = lr_now
-
-    def save_model(self, env_name, number, seed, total_steps):
-        torch.save(self.actor.state_dict(),
-                   "./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
-                                                                                    int(total_steps / 1000)))
-        torch.save(self.critic.state_dict(),
-                   "./model/PPO_critic_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
-                                                                                     int(total_steps / 1000)))
-
-    def load_model(self, env_name, number, seed, step):
-        self.actor.load_state_dict(
-            torch.load("./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))
-        self.critic.load_state_dict(
-            torch.load("./model/PPO_critic_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))

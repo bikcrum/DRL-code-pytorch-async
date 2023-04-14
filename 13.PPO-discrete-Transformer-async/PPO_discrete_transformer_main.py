@@ -50,7 +50,7 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
 
         time_now = datetime.datetime.now()
 
@@ -72,7 +72,7 @@ class Runner:
                     "episode_reward_eval": ep_reward,
                     "episode_length_eval": ep_len,
                     "total_steps": self.total_steps,
-                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
                 }
 
                 logging.info(log)
@@ -87,7 +87,7 @@ class Runner:
                 "episode_reward": ep_reward,
                 "episode_length": ep_len,
                 "total_steps": self.total_steps,
-                "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
             }
             logging.info(log)
 
@@ -101,7 +101,7 @@ class Runner:
                     "actor_loss": actor_loss,
                     "critic_loss": critic_loss,
                     "total_steps": self.total_steps,
-                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
                 }
                 logging.info(log)
 
@@ -182,6 +182,7 @@ class Runner:
                 s_, r, done, _ = self.env.step(a)
                 # self.env.render()
                 episode_reward += r
+                episode_length += 1
                 s = s_
             evaluate_reward += episode_reward
             evaluate_length += episode_length
@@ -211,7 +212,7 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument('--transformer_max_len', type=int, default=20, help='max length of sequence')
+    parser.add_argument('--transformer_max_len', type=int, default=16, help='max length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
