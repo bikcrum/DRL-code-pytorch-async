@@ -54,7 +54,7 @@ class Actor_Transformer(nn.Module):
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
         encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=64, dropout=0.1)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=3)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
         self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
 
@@ -247,6 +247,8 @@ class PPO_discrete_RNN:
         self.use_adv_norm = args.use_adv_norm
 
         # self.ac = Actor_Critic_RNN(args)
+        # self.actor = Actor_RNN(args)
+        # self.critic = Critic_RNN(args)
         self.actor = Actor_Transformer(args)
         self.critic = Critic_Transformer(args)
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5

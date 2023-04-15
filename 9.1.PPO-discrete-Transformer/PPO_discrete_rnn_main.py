@@ -135,6 +135,8 @@ class Runner:
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=False)
                 v = self.agent.get_value_transformer(state_buffer)
+                # a, a_logprob = self.agent.choose_action(s, evaluate=False)
+                # v = self.agent.get_value(s)
                 s_, r, done, _ = self.env.step(a)
                 episode_reward += r
                 episode_length += 1
@@ -159,6 +161,7 @@ class Runner:
                 state_buffer.pop(0)
             state_buffer.append(s)
             v = self.agent.get_value_transformer(state_buffer)
+            # v = self.agent.get_value(s)
             self.replay_buffer.store_last_value(episode_step + 1, v)
 
             total_reward += episode_reward
@@ -183,6 +186,7 @@ class Runner:
 
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=True)
+                # a, a_logprob = self.agent.choose_action(s, evaluate=True)
                 s_, r, done, _ = self.env.step(a)
                 episode_reward += r
                 episode_length += 1
@@ -216,6 +220,7 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
+    # parser.add_argument('--transformer_max_len', type=int, default=16, help='max length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -229,7 +234,7 @@ if __name__ == '__main__':
     parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
     parser.add_argument("--use_orthogonal_init", type=bool, default=True, help="Trick 8: orthogonal initialization")
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
-    parser.add_argument("--use_tanh", type=float, default=False, help="Trick 10: tanh activation function")
+    parser.add_argument("--use_tanh", type=float, default=True, help="Trick 10: tanh activation function")
     parser.add_argument("--use_gru", type=bool, default=True, help="Whether to use GRU")
 
     args = parser.parse_args()
