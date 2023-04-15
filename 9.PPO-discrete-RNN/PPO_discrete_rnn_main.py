@@ -1,5 +1,9 @@
+import datetime
+import logging
+
 import torch
 import numpy as np
+import wandb
 from torch.utils.tensorboard import SummaryWriter
 import gym
 import argparse
@@ -7,6 +11,7 @@ from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
 from ppo_discrete_rnn import PPO_discrete_RNN
 
+logging.getLogger().setLevel(logging.INFO)
 
 class Runner:
     def __init__(self, args, env_name, number, seed):
@@ -48,18 +53,68 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
+        time_now = datetime.datetime.now()
+
+        wandb.init(
+            entity='team-osu',
+            project=f'toy-test-{self.env_name}',
+            name=str(time_now),
+            config=args.__dict__
+        )
+
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
+        evaluate_num = -1  # Record the number of evaluations
+        prev_total_steps = 0
+
         evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
-            if self.total_steps // self.args.evaluate_freq > evaluate_num:
-                self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+            # if self.total_steps // self.args.evaluate_freq > evaluate_num:
+            if self.total_steps - prev_total_steps > self.args.evaluate_freq:
+                ep_reward, ep_len = self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                # self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
                 evaluate_num += 1
+                prev_total_steps = self.total_steps
 
-            _, episode_steps = self.run_episode()  # Run an episode
-            self.total_steps += episode_steps
+                log = {
+                    "episode_reward": ep_reward,
+                    "episode_length": ep_len,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+                }
+                logging.info(log)
 
-            if self.replay_buffer.episode_num == self.args.batch_size:
-                self.agent.train(self.replay_buffer, self.total_steps)  # Training
-                self.replay_buffer.reset_buffer()
+                wandb.log(log, step=self.total_steps)
+
+            for _ in range(self.args.batch_size):
+                ep_reward, ep_len = self.run_episode()  # Run an episode
+                self.total_steps += ep_len
+
+                log = {
+                    "episode_reward_eval": ep_reward,
+                    "episode_length_eval": ep_len,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+                }
+
+                logging.info(log)
+
+                wandb.log(log, step=self.total_steps)
+
+            loss = self.agent.train(self.replay_buffer, self.total_steps,
+                                                       device_optim)  # Training
+
+            self.agent.ac = self.agent.ac.to(device_collector)
+
+            log = {
+                "loss": loss,
+                "total_steps": self.total_steps,
+                "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+            }
+            logging.info(log)
+
+            wandb.log(log, step=self.total_steps)
+
+            self.replay_buffer.reset_buffer()
 
         self.evaluate_policy()
         self.env.close()
@@ -100,8 +155,9 @@ class Runner:
 
     def evaluate_policy(self, ):
         evaluate_reward = 0
+        evaluate_length = 0
         for _ in range(self.args.evaluate_times):
-            episode_reward, done = 0, False
+            episode_reward, episode_length, done = 0, 0, False
             s = self.env.reset()
             self.agent.reset_rnn_hidden()
             while not done:
@@ -112,25 +168,34 @@ class Runner:
                 episode_reward += r
                 s = s_
             evaluate_reward += episode_reward
+            evaluate_length += episode_length
 
         evaluate_reward = evaluate_reward / self.args.evaluate_times
-        self.evaluate_rewards.append(evaluate_reward)
-        print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward, global_step=self.total_steps)
-        # Save the rewards and models
-        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed), np.array(self.evaluate_rewards))
+        evaluate_length = evaluate_length / self.args.evaluate_times
+
+        # self.evaluate_rewards.append(evaluate_reward)
+        # print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+        #                        global_step=self.total_steps)
+        # # Save the rewards and models
+        # np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
+        #         np.array(self.evaluate_rewards))
+
+        return evaluate_reward, evaluate_length
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
     parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Evaluate the policy every 'evaluate_freq' steps")
+    parser.add_argument("--evaluate_freq", type=float, default=5e3,
+                        help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--evaluate_times", type=float, default=3, help="Evaluate times")
 
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
-    parser.add_argument("--hidden_dim", type=int, default=64, help="The number of neurons in hidden layers of the neural network")
+    parser.add_argument("--hidden_dim", type=int, default=64,
+                        help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")

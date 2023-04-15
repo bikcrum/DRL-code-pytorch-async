@@ -1,7 +1,10 @@
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import wandb
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler, SequentialSampler
 from torch.distributions import Categorical
 import copy
@@ -109,8 +112,13 @@ class PPO_discrete_RNN:
             value = self.ac.critic(s)
             return value.item()
 
-    def train(self, replay_buffer, total_steps):
-        batch = replay_buffer.get_training_data()  # Get training data
+    def train(self, replay_buffer, total_steps, device):
+        self.ac = self.ac.to(device)
+
+        batch = replay_buffer.get_training_data(device)  # Get training data
+
+        # Optimize policy for K epochs:
+        losses = []
 
         # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
@@ -144,8 +152,12 @@ class PPO_discrete_RNN:
                     torch.nn.utils.clip_grad_norm_(self.ac.parameters(), 0.5)
                 self.optimizer.step()
 
+                losses.append(loss.item())
+
         if self.use_lr_decay:  # Trick 6:learning rate Decay
             self.lr_decay(total_steps)
+
+        return np.mean(losses)
 
     def lr_decay(self, total_steps):
         lr_now = 0.9 * self.lr * (1 - total_steps / self.max_train_steps) + 0.1 * self.lr
