@@ -13,6 +13,7 @@ from ppo_discrete_rnn import PPO_discrete_RNN
 
 logging.getLogger().setLevel(logging.INFO)
 
+
 class Runner:
     def __init__(self, args, env_name, number, seed):
         self.args = args
@@ -63,16 +64,13 @@ class Runner:
         )
 
         device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
-        evaluate_num = -1  # Record the number of evaluations
         prev_total_steps = 0
 
-        evaluate_num = -1  # Record the number of evaluations
         while self.total_steps < self.args.max_train_steps:
             # if self.total_steps // self.args.evaluate_freq > evaluate_num:
             if self.total_steps - prev_total_steps > self.args.evaluate_freq:
                 ep_reward, ep_len = self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
                 # self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
-                evaluate_num += 1
                 prev_total_steps = self.total_steps
 
                 log = {
@@ -85,23 +83,22 @@ class Runner:
 
                 wandb.log(log, step=self.total_steps)
 
-            for _ in range(self.args.batch_size):
-                ep_reward, ep_len = self.run_episode()  # Run an episode
-                self.total_steps += ep_len
+            ep_reward, ep_len = self.run_episode()  # Run an episode
+            self.total_steps += ep_len
 
-                log = {
-                    "episode_reward_eval": ep_reward,
-                    "episode_length_eval": ep_len,
-                    "total_steps": self.total_steps,
-                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
-                }
+            log = {
+                "episode_reward_eval": ep_reward / self.args.batch_size,
+                "episode_length_eval": ep_len / self.args.batch_size,
+                "total_steps": self.total_steps,
+                "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+            }
 
-                logging.info(log)
+            logging.info(log)
 
-                wandb.log(log, step=self.total_steps)
+            wandb.log(log, step=self.total_steps)
 
             loss = self.agent.train(self.replay_buffer, self.total_steps,
-                                                       device_optim)  # Training
+                                    device_optim)  # Training
 
             self.agent.ac = self.agent.ac.to(device_collector)
 
@@ -120,38 +117,46 @@ class Runner:
         self.env.close()
 
     def run_episode(self, ):
-        episode_reward = 0
-        s = self.env.reset()
-        if self.args.use_reward_scaling:
-            self.reward_scaling.reset()
-        self.agent.reset_rnn_hidden()
-        for episode_step in range(self.args.episode_limit):
+        total_reward = 0
+        total_length = 0
+        for _ in range(self.args.batch_size):
+            episode_reward = 0
+            episode_length = 0
+            s = self.env.reset()
+            if self.args.use_reward_scaling:
+                self.reward_scaling.reset()
+            self.agent.reset_rnn_hidden()
+            for episode_step in range(self.args.episode_limit):
+                if self.args.use_state_norm:
+                    s = self.state_norm(s)
+                a, a_logprob = self.agent.choose_action(s, evaluate=False)
+                v = self.agent.get_value(s)
+                s_, r, done, _ = self.env.step(a)
+                episode_reward += r
+                episode_length += 1
+
+                if done and episode_step + 1 != self.args.episode_limit:
+                    dw = True
+                else:
+                    dw = False
+                if self.args.use_reward_scaling:
+                    r = self.reward_scaling(r)
+                # Store the transition
+                self.replay_buffer.store_transition(episode_step, s, v, a, a_logprob, r, dw)
+                s = s_
+                if done:
+                    break
+
+            # An episode is over, store v in the last step
             if self.args.use_state_norm:
                 s = self.state_norm(s)
-            a, a_logprob = self.agent.choose_action(s, evaluate=False)
             v = self.agent.get_value(s)
-            s_, r, done, _ = self.env.step(a)
-            episode_reward += r
+            self.replay_buffer.store_last_value(episode_step + 1, v)
 
-            if done and episode_step + 1 != self.args.episode_limit:
-                dw = True
-            else:
-                dw = False
-            if self.args.use_reward_scaling:
-                r = self.reward_scaling(r)
-            # Store the transition
-            self.replay_buffer.store_transition(episode_step, s, v, a, a_logprob, r, dw)
-            s = s_
-            if done:
-                break
+            total_reward += episode_reward
+            total_length += episode_length
 
-        # An episode is over, store v in the last step
-        if self.args.use_state_norm:
-            s = self.state_norm(s)
-        v = self.agent.get_value(s)
-        self.replay_buffer.store_last_value(episode_step + 1, v)
-
-        return episode_reward, episode_step + 1
+        return total_reward, total_length
 
     def evaluate_policy(self, ):
         evaluate_reward = 0
