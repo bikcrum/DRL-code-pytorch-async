@@ -140,7 +140,7 @@ class Runner:
                     s = self.state_norm(s)
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=False)
-                v = self.agent.get_value_transformer(state_buffer)
+                # v = self.agent.get_value_transformer(state_buffer)
                 # a, a_logprob = self.agent.choose_action(s, evaluate=False)
                 # v = self.agent.get_value(s)
                 s_, r, done, _ = self.env.step(a)
@@ -154,7 +154,7 @@ class Runner:
                 if self.args.use_reward_scaling:
                     r = self.reward_scaling(r)
                 # Store the transition
-                self.replay_buffer.store_transition(seq_step, s, v, a, a_logprob, r, dw)
+                self.replay_buffer.store_transition(seq_step, s, a, a_logprob, r, dw)
                 s = s_
                 if done or episode_step == self.args.episode_limit:
                     break
@@ -163,12 +163,12 @@ class Runner:
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
-            if len(state_buffer) == self.args.episode_limit:
-                state_buffer.pop(0)
-            state_buffer.append(s)
-            v = self.agent.get_value_transformer(state_buffer)
+            # if len(state_buffer) == self.args.transformer_max_len:
+            #     state_buffer.pop(0)
+            # state_buffer.append(s)
+            # v = self.agent.get_value_transformer(state_buffer)
             # v = self.agent.get_value(s)
-            self.replay_buffer.store_last_value(seq_step + 1, v)
+            self.replay_buffer.store_last_state(seq_step + 1, s)
 
             if done or episode_step == self.args.episode_limit:
                 total_reward.append(episode_reward)

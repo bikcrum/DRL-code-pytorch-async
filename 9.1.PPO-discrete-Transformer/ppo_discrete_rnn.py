@@ -52,7 +52,7 @@ class Actor_Transformer(nn.Module):
 
         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
-        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.transformer_max_len)
         encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=64, dropout=0.1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
@@ -98,7 +98,7 @@ class Critic_Transformer(nn.Module):
 
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
-        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.transformer_max_len)
         encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=4, dim_feedforward=64, dropout=0.1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
@@ -251,6 +251,8 @@ class PPO_discrete_RNN:
         # self.critic = Critic_RNN(args)
         self.actor = Actor_Transformer(args)
         self.critic = Critic_Transformer(args)
+        # self.actor.eval()
+        # self.critic.eval()
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr, eps=1e-5)
             self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr, eps=1e-5)
@@ -285,6 +287,7 @@ class PPO_discrete_RNN:
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
             # Get output from the last observation
+            # torch.manual_seed(0)
             logit = self.actor(s)[:, -1]
             if evaluate:
                 a = torch.argmax(logit)
@@ -298,6 +301,7 @@ class PPO_discrete_RNN:
     def get_value_transformer(self, s):
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            # torch.manual_seed(0)
             value = self.critic(s)[:, -1]
             return value.item()
 
@@ -305,7 +309,7 @@ class PPO_discrete_RNN:
         self.actor = self.actor.to(device)
         self.critic = self.critic.to(device)
 
-        batch = replay_buffer.get_training_data(device)  # Get training data
+        batch = replay_buffer.get_training_data(device, self.critic)  # Get training data
 
         # Optimize policy for K epochs:
         actor_losses = []
