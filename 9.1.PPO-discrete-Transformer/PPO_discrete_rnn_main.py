@@ -127,12 +127,14 @@ class Runner:
             s = self.env.reset()
             if self.args.use_reward_scaling:
                 self.reward_scaling.reset()
-            self.agent.reset_rnn_hidden()
+            # self.agent.reset_rnn_hidden()
+            state_buffer = []
             for episode_step in range(self.args.episode_limit):
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
-                a, a_logprob = self.agent.choose_action(s, evaluate=False)
-                v = self.agent.get_value(s)
+                state_buffer.append(s)
+                a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=False)
+                v = self.agent.get_value_transformer(state_buffer)
                 s_, r, done, _ = self.env.step(a)
                 episode_reward += r
                 episode_length += 1
@@ -152,7 +154,11 @@ class Runner:
             # An episode is over, store v in the last step
             if self.args.use_state_norm:
                 s = self.state_norm(s)
-            v = self.agent.get_value(s)
+
+            if len(state_buffer) == self.args.episode_limit:
+                state_buffer.pop(0)
+            state_buffer.append(s)
+            v = self.agent.get_value_transformer(state_buffer)
             self.replay_buffer.store_last_value(episode_step + 1, v)
 
             total_reward += episode_reward
@@ -166,13 +172,20 @@ class Runner:
         for _ in range(self.args.evaluate_times):
             episode_reward, episode_length, done = 0, 0, False
             s = self.env.reset()
-            self.agent.reset_rnn_hidden()
+            state_buffer = []
+            # self.agent.reset_rnn_hidden()
             while not done:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
-                a, a_logprob = self.agent.choose_action(s, evaluate=True)
+
+                if len(state_buffer) == self.args.episode_limit:
+                    state_buffer.pop(0)
+
+                state_buffer.append(s)
+                a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=True)
                 s_, r, done, _ = self.env.step(a)
                 episode_reward += r
+                episode_length += 1
                 s = s_
             evaluate_reward += episode_reward
             evaluate_length += episode_length

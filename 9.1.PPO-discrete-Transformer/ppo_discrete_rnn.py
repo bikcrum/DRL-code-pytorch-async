@@ -1,4 +1,5 @@
 import logging
+import math
 
 import torch
 import torch.nn as nn
@@ -8,6 +9,8 @@ import wandb
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler, SequentialSampler
 from torch.distributions import Categorical
 import copy
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 # Trick 8: orthogonal initialization
@@ -19,6 +22,120 @@ def orthogonal_init(layer, gain=np.sqrt(2)):
             nn.init.orthogonal_(param, gain=gain)
 
     return layer
+
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+
+
+class Actor_Transformer(nn.Module):
+    def __init__(self, args):
+        super(Actor_Transformer, self).__init__()
+
+        self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=64, dropout=0.1)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=3)
+
+        self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
+
+        if args.use_orthogonal_init:
+            print("------use orthogonal init------")
+            orthogonal_init(self.actor_fc1)
+            # orthogonal_init(self.pos_encoder)
+            orthogonal_init(self.actor_fc2, gain=0.01)
+            # orthogonal_init(self.critic_fc1)
+            # orthogonal_init(self.critic_rnn)
+            # orthogonal_init(self.critic_fc2)
+
+    # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
+    def forward(self, s):
+        assert s.dim() == 3, "Actor_Transformer only accept 3d input. [batch_size, seq_len, state_dim]"
+
+        s = s.transpose(0, 1)
+        # s: [seq_len, batch_size, state_dim]
+
+        s = self.actor_fc1(s)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        s = self.pos_encoder(s)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        s = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
+        # s: [seq_len, batch_size, hidden_dim]
+
+        logit = self.actor_fc2(s)
+        # logit: [seq_len, batch_size, action_dim]
+
+        logit = logit.transpose(0, 1)
+        # logits: [batch_size, seq_len, action_dim]
+
+        return logit
+
+
+class Critic_Transformer(nn.Module):
+    def __init__(self, args):
+        super(Critic_Transformer, self).__init__()
+
+        self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=4, dim_feedforward=64, dropout=0.1)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
+
+        self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
+
+        if args.use_orthogonal_init:
+            print("------use orthogonal init------")
+            # orthogonal_init(self.actor_fc1)
+            # orthogonal_init(self.pos_encoder)
+            # orthogonal_init(self.actor_fc2, gain=0.01)
+            orthogonal_init(self.critic_fc1)
+            # orthogonal_init(self.critic_rnn)
+            orthogonal_init(self.critic_fc2)
+
+    # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
+    def forward(self, s):
+        assert s.dim() == 3, "Critic_Transformer only accept 3d input. [batch_size, seq_len, state_dim]"
+
+        s = s.transpose(0, 1)
+        # s: [seq_len, batch_size, state_dim]
+
+        s = self.critic_fc1(s)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        s = self.pos_encoder(s)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        s = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
+        # s: [seq_len, batch_size, hidden_dim]
+
+        logit = self.critic_fc2(s)
+        # logit: [seq_len, batch_size, 1]
+
+        logit = logit.transpose(0, 1)
+        # logits: [batch_size, seq_len, 1]
+
+        return logit
 
 
 class Actor_RNN(nn.Module):
@@ -130,8 +247,8 @@ class PPO_discrete_RNN:
         self.use_adv_norm = args.use_adv_norm
 
         # self.ac = Actor_Critic_RNN(args)
-        self.actor = Actor_RNN(args)
-        self.critic = Critic_RNN(args)
+        self.actor = Actor_Transformer(args)
+        self.critic = Critic_Transformer(args)
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr, eps=1e-5)
             self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr, eps=1e-5)
@@ -160,6 +277,26 @@ class PPO_discrete_RNN:
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
             value = self.critic(s)
+            return value.item()
+
+    def choose_action_transformer(self, s, evaluate=False):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            # Get output from the last observation
+            logit = self.actor(s)[:, -1]
+            if evaluate:
+                a = torch.argmax(logit)
+                return a.item(), None
+            else:
+                dist = Categorical(logits=logit)
+                a = dist.sample()
+                a_logprob = dist.log_prob(a)
+                return a.item(), a_logprob.item()
+
+    def get_value_transformer(self, s):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            value = self.critic(s)[:, -1]
             return value.item()
 
     def train(self, replay_buffer, total_steps, device):
