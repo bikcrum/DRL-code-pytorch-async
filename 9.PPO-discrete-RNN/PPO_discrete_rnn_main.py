@@ -215,7 +215,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 0
-    for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
-        runner.run()
+    env_index = 1
+    seed = 0
+    runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
+    runner.run()
