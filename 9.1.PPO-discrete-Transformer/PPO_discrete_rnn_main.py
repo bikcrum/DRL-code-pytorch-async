@@ -60,6 +60,7 @@ class Runner:
             entity='team-osu',
             project=f'toy-test-{self.env_name}',
             name=str(time_now),
+            # mode='disabled',
             config=args.__dict__
         )
 
@@ -83,12 +84,12 @@ class Runner:
 
                 wandb.log(log, step=self.total_steps)
 
-            ep_reward, ep_len = self.run_episode()  # Run an episode
-            self.total_steps += ep_len
+            avg_reward, avg_steps, total_steps = self.run_episode()  # Run an episode
+            self.total_steps += total_steps
 
             log = {
-                "episode_reward_eval": ep_reward / self.args.batch_size,
-                "episode_length_eval": ep_len / self.args.batch_size,
+                "episode_reward_eval": avg_reward,
+                "episode_length_eval": avg_steps,
                 "total_steps": self.total_steps,
                 "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
             }
@@ -98,7 +99,7 @@ class Runner:
             wandb.log(log, step=self.total_steps)
 
             actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
-                                    device_optim)  # Training
+                                                       device_optim)  # Training
 
             self.agent.actor = self.agent.actor.to(device_collector)
             self.agent.critic = self.agent.critic.to(device_collector)
@@ -119,17 +120,22 @@ class Runner:
         self.env.close()
 
     def run_episode(self, ):
-        total_reward = 0
-        total_length = 0
+        total_reward = []
+        total_steps = []
+
+        episode_reward = 0
+        episode_step = 0
+
+        s = self.env.reset()
+
+        if self.args.use_reward_scaling:
+            self.reward_scaling.reset()
+
         for _ in range(self.args.batch_size):
-            episode_reward = 0
-            episode_length = 0
-            s = self.env.reset()
-            if self.args.use_reward_scaling:
-                self.reward_scaling.reset()
+
             # self.agent.reset_rnn_hidden()
             state_buffer = []
-            for episode_step in range(self.args.episode_limit):
+            for seq_step in range(self.args.transformer_max_len):
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
                 state_buffer.append(s)
@@ -139,18 +145,18 @@ class Runner:
                 # v = self.agent.get_value(s)
                 s_, r, done, _ = self.env.step(a)
                 episode_reward += r
-                episode_length += 1
+                episode_step += 1
 
-                if done and episode_step + 1 != self.args.episode_limit:
+                if done and episode_step != self.args.episode_limit:
                     dw = True
                 else:
                     dw = False
                 if self.args.use_reward_scaling:
                     r = self.reward_scaling(r)
                 # Store the transition
-                self.replay_buffer.store_transition(episode_step, s, v, a, a_logprob, r, dw)
+                self.replay_buffer.store_transition(seq_step, s, v, a, a_logprob, r, dw)
                 s = s_
-                if done:
+                if done or episode_step == self.args.episode_limit:
                     break
 
             # An episode is over, store v in the last step
@@ -162,12 +168,21 @@ class Runner:
             state_buffer.append(s)
             v = self.agent.get_value_transformer(state_buffer)
             # v = self.agent.get_value(s)
-            self.replay_buffer.store_last_value(episode_step + 1, v)
+            self.replay_buffer.store_last_value(seq_step + 1, v)
 
-            total_reward += episode_reward
-            total_length += episode_length
+            if done or episode_step == self.args.episode_limit:
+                total_reward.append(episode_reward)
+                total_steps.append(episode_step)
 
-        return total_reward, total_length
+                episode_reward = 0
+                episode_step = 0
+
+                s = self.env.reset()
+
+                if self.args.use_reward_scaling:
+                    self.reward_scaling.reset()
+
+        return np.mean(total_reward), np.mean(total_steps), np.sum(total_steps)
 
     def evaluate_policy(self, ):
         evaluate_reward = 0
@@ -181,7 +196,7 @@ class Runner:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
 
-                if len(state_buffer) == self.args.episode_limit:
+                if len(state_buffer) == self.args.transformer_max_len:
                     state_buffer.pop(0)
 
                 state_buffer.append(s)
@@ -210,17 +225,17 @@ class Runner:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
-    parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
+    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--evaluate_times", type=float, default=3, help="Evaluate times")
 
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=8, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    # parser.add_argument('--transformer_max_len', type=int, default=16, help='max length of sequence')
+    parser.add_argument('--transformer_max_len', type=int, default=250, help='max length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -240,7 +255,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 0
-    for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
-        runner.run()
+    env_index = 1
+    seed = 0
+    runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
+    runner.run()
