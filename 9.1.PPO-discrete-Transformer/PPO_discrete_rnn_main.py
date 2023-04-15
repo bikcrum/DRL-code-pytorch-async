@@ -97,13 +97,15 @@ class Runner:
 
             wandb.log(log, step=self.total_steps)
 
-            loss = self.agent.train(self.replay_buffer, self.total_steps,
+            actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
                                     device_optim)  # Training
 
-            self.agent.ac = self.agent.ac.to(device_collector)
+            self.agent.actor = self.agent.actor.to(device_collector)
+            self.agent.critic = self.agent.critic.to(device_collector)
 
             log = {
-                "loss": loss,
+                "actor_loss": actor_loss,
+                "critic_loss": critic_loss,
                 "total_steps": self.total_steps,
                 "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
             }
