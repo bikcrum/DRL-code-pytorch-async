@@ -1,14 +1,17 @@
-import argparse
-import collections
+import datetime
+import logging
 
-import gym
-import numpy as np
 import torch
+import numpy as np
+import wandb
 from torch.utils.tensorboard import SummaryWriter
-
+import gym
+import argparse
 from normalization import Normalization, RewardScaling
-from ppo_discrete_transformer import PPO_discrete_Transformer
 from replaybuffer import ReplayBuffer
+from ppo_discrete_rnn import PPO_discrete_RNN
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 class Runner:
@@ -35,7 +38,7 @@ class Runner:
         print("episode_limit={}".format(args.episode_limit))
 
         self.replay_buffer = ReplayBuffer(args)
-        self.agent = PPO_discrete_Transformer(args)
+        self.agent = PPO_discrete_RNN(args)
 
         # Create a tensorboard
         self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
@@ -51,113 +54,183 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
-        evaluate_num = -1  # Record the number of evaluations
+        time_now = datetime.datetime.now()
+
+        wandb.init(
+            entity='team-osu',
+            project=f'toy-test-{self.env_name}',
+            name=str(time_now),
+            # mode='disabled',
+            config=args.__dict__
+        )
+
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
+        prev_total_steps = 0
+
         while self.total_steps < self.args.max_train_steps:
-            # logging.info('Evaluating')
-            if self.total_steps // self.args.evaluate_freq > evaluate_num:
-                self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
-                evaluate_num += 1
+            # if self.total_steps // self.args.evaluate_freq > evaluate_num:
+            if self.total_steps - prev_total_steps > self.args.evaluate_freq:
+                ep_reward, ep_len = self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                # self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                prev_total_steps = self.total_steps
 
-            # logging.info('Collecting experience')
-            _, episode_steps = self.run_episode()  # Run an episode
-            self.total_steps += episode_steps
+                log = {
+                    "episode_reward": ep_reward,
+                    "episode_length": ep_len,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+                }
+                logging.info(log)
 
-            if self.replay_buffer.episode_num == self.args.batch_size:
-                actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
-                                                           device=device_optim)  # Training
-                print("total_steps:{} \t actor_loss:{} \t critic_loss:{}".format(self.total_steps, actor_loss,
-                                                                                 critic_loss))
-                self.replay_buffer.reset_buffer()
-                self.agent.actor = self.agent.actor.to(device_collector)
-                self.agent.critic = self.agent.critic.to(device_collector)
+                wandb.log(log, step=self.total_steps)
+
+            avg_reward, avg_steps, total_steps = self.run_episode()  # Run an episode
+            self.total_steps += total_steps
+
+            log = {
+                "episode_reward_eval": avg_reward,
+                "episode_length_eval": avg_steps,
+                "total_steps": self.total_steps,
+                "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+            }
+
+            logging.info(log)
+
+            wandb.log(log, step=self.total_steps)
+
+            actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
+                                                       device_optim)  # Training
+
+            self.agent.actor = self.agent.actor.to(device_collector)
+            self.agent.critic = self.agent.critic.to(device_collector)
+
+            log = {
+                "actor_loss": actor_loss,
+                "critic_loss": critic_loss,
+                "total_steps": self.total_steps,
+                "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
+            }
+            logging.info(log)
+
+            wandb.log(log, step=self.total_steps)
+
+            self.replay_buffer.reset_buffer()
 
         self.evaluate_policy()
         self.env.close()
 
     def run_episode(self, ):
+        total_reward = []
+        total_steps = []
+
         episode_reward = 0
+        episode_step = 0
+
         s = self.env.reset()
+
         if self.args.use_reward_scaling:
             self.reward_scaling.reset()
 
-        state_buffer = collections.deque(maxlen=self.args.episode_limit)
+        for _ in range(self.args.batch_size):
 
-        # self.agent.reset_rnn_hidden()
-        for episode_step in range(self.args.episode_limit):
+            # self.agent.reset_rnn_hidden()
+            state_buffer = []
+            if self.args.transformer_randomize_len:
+                max_seq_length = np.random.randint(1, self.args.transformer_max_len + 1)
+            else:
+                max_seq_length = self.args.transformer_max_len
+
+            for seq_step in range(max_seq_length):
+                if self.args.use_state_norm:
+                    s = self.state_norm(s)
+                state_buffer.append(s)
+                a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=False)
+                # v = self.agent.get_value_transformer(state_buffer)
+                # a, a_logprob = self.agent.choose_action(s, evaluate=False)
+                # v = self.agent.get_value(s)
+                s_, r, done, _ = self.env.step(a)
+                episode_reward += r
+                episode_step += 1
+
+                if done and episode_step != self.args.episode_limit:
+                    dw = True
+                else:
+                    dw = False
+                if self.args.use_reward_scaling:
+                    r = self.reward_scaling(r)
+                # Store the transition
+                self.replay_buffer.store_transition(seq_step, s, a, a_logprob, r, dw)
+                s = s_
+                if done or episode_step == self.args.episode_limit:
+                    break
+
+            # An episode is over, store v in the last step
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
-            if len(state_buffer) == self.args.transformer_max_len:
-                state_buffer.popleft()
+            # if len(state_buffer) == self.args.transformer_max_len:
+            #     state_buffer.pop(0)
+            # state_buffer.append(s)
+            # v = self.agent.get_value_transformer(state_buffer)
+            # v = self.agent.get_value(s)
+            self.replay_buffer.store_last_state(seq_step + 1, s)
 
-            state_buffer.append(s)
+            if done or episode_step == self.args.episode_limit:
+                total_reward.append(episode_reward)
+                total_steps.append(episode_step)
 
-            a, a_logprob = self.agent.choose_action(state_buffer, evaluate=False)
-            v = self.agent.get_value(state_buffer)
-            s_, r, done, _ = self.env.step(a)
-            episode_reward += r
+                episode_reward = 0
+                episode_step = 0
 
-            if done and episode_step + 1 != self.args.episode_limit:
-                dw = True
-            else:
-                dw = False
-            if self.args.use_reward_scaling:
-                r = self.reward_scaling(r)
-            # Store the transition
-            self.replay_buffer.store_transition(episode_step, s, v, a, a_logprob, r, dw)
-            s = s_
-            if done:
-                break
+                s = self.env.reset()
 
-        # An episode is over, store v in the last step
-        if self.args.use_state_norm:
-            s = self.state_norm(s)
+                if self.args.use_reward_scaling:
+                    self.reward_scaling.reset()
 
-        if len(state_buffer) == self.args.transformer_max_len:
-            state_buffer.popleft()
-        state_buffer.append(s)
+        return np.mean(total_reward), np.mean(total_steps), np.sum(total_steps)
 
-        v = self.agent.get_value(state_buffer)
-        self.replay_buffer.store_last_value(episode_step + 1, v)
-
-        return episode_reward, episode_step + 1
-
-    def evaluate_policy(self):
+    def evaluate_policy(self, ):
         evaluate_reward = 0
+        evaluate_length = 0
         for _ in range(self.args.evaluate_times):
-            episode_reward, done = 0, False
+            episode_reward, episode_length, done = 0, 0, False
             s = self.env.reset()
+            state_buffer = []
             # self.agent.reset_rnn_hidden()
-
-            state_buffer = collections.deque(maxlen=self.args.episode_limit)
-
             while not done:
                 if self.args.use_state_norm:
                     s = self.state_norm(s, update=False)
+
                 if len(state_buffer) == self.args.transformer_max_len:
-                    state_buffer.popleft()
+                    state_buffer.pop(0)
+
                 state_buffer.append(s)
-                a, a_logprob = self.agent.choose_action(state_buffer, evaluate=True)
+                a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=True)
+                # a, a_logprob = self.agent.choose_action(s, evaluate=True)
                 s_, r, done, _ = self.env.step(a)
-                # self.env.render()
                 episode_reward += r
+                episode_length += 1
                 s = s_
             evaluate_reward += episode_reward
+            evaluate_length += episode_length
 
         evaluate_reward = evaluate_reward / self.args.evaluate_times
-        self.evaluate_rewards.append(evaluate_reward)
-        print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
-                               global_step=self.total_steps)
-        # Save the rewards and models
-        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
-                np.array(self.evaluate_rewards))
+        evaluate_length = evaluate_length / self.args.evaluate_times
+
+        # self.evaluate_rewards.append(evaluate_reward)
+        # print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+        #                        global_step=self.total_steps)
+        # # Save the rewards and models
+        # np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
+        #         np.array(self.evaluate_rewards))
+
+        return evaluate_reward, evaluate_length
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameter Setting for PPO-discrete")
-    parser.add_argument("--max_train_steps", type=int, default=int(2e5), help=" Maximum number of training steps")
+    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
@@ -167,7 +240,8 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument('--transformer_max_len', type=int, default=20, help='max length of sequence')
+    parser.add_argument('--transformer_max_len', type=int, default=200, help='max length of sequence')
+    parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -181,13 +255,13 @@ if __name__ == '__main__':
     parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
     parser.add_argument("--use_orthogonal_init", type=bool, default=True, help="Trick 8: orthogonal initialization")
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
-    parser.add_argument("--use_tanh", type=float, default=False, help="Trick 10: tanh activation function")
+    parser.add_argument("--use_tanh", type=float, default=True, help="Trick 10: tanh activation function")
     parser.add_argument("--use_gru", type=bool, default=True, help="Whether to use GRU")
 
     args = parser.parse_args()
 
     env_names = ['CartPole-v1', 'LunarLander-v2']
     env_index = 0
-    for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
-        runner.run()
+    seed = 0
+    runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
+    runner.run()

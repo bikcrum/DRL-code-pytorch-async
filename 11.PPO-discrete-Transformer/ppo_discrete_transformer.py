@@ -1,11 +1,14 @@
 import logging
 import math
 
-import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import wandb
+from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler, SequentialSampler
 from torch.distributions import Categorical
-from torch.utils.data.sampler import BatchSampler, SequentialSampler
+import copy
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -49,7 +52,7 @@ class Actor_Transformer(nn.Module):
 
         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
-        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.transformer_max_len)
         encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=64, dropout=0.1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
@@ -95,7 +98,7 @@ class Critic_Transformer(nn.Module):
 
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
-        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.episode_limit)
+        self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0.1, max_len=args.transformer_max_len)
         encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=4, dim_feedforward=64, dropout=0.1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=2)
 
@@ -135,55 +138,99 @@ class Critic_Transformer(nn.Module):
         return logit
 
 
-#
-# class Actor_Critic_Transformer(nn.Module):
-#     def __init__(self, args):
-#         super(Actor_Critic_Transformer, self).__init__()
-#         self.use_gru = args.use_gru
-#         self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
-#
-#         self.actor_rnn_hidden = None
-#         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-#         if args.use_gru:
-#             print("------use GRU------")
-#             self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
-#         else:
-#             print("------use LSTM------")
-#             self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-#
-#         self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
-#
-#         self.critic_rnn_hidden = None
-#         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-#         if args.use_gru:
-#             self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
-#         else:
-#             self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-#         self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
-#
-#         if args.use_orthogonal_init:
-#             print("------use orthogonal init------")
-#             orthogonal_init(self.actor_fc1)
-#             orthogonal_init(self.actor_rnn)
-#             orthogonal_init(self.actor_fc2, gain=0.01)
-#             orthogonal_init(self.critic_fc1)
-#             orthogonal_init(self.critic_rnn)
-#             orthogonal_init(self.critic_fc2)
-#
-#     def actor(self, s):
-#         s = self.activate_func(self.actor_fc1(s))
-#         output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
-#         logit = self.actor_fc2(output)
-#         return logit
-#
-#     def critic(self, s):
-#         s = self.activate_func(self.critic_fc1(s))
-#         output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
-#         value = self.critic_fc2(output)
-#         return value
+class Actor_RNN(nn.Module):
+    def __init__(self, args):
+        super(Actor_RNN, self).__init__()
+        self.use_gru = args.use_gru
+        self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
+
+        self.actor_rnn_hidden = None
+        self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        if args.use_gru:
+            print("------use GRU------")
+            self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        else:
+            print("------use LSTM------")
+            self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
+        self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
+
+        # self.critic_rnn_hidden = None
+        # self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        # if args.use_gru:
+        #     self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        # else:
+        #     self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
+        # self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
+
+        if args.use_orthogonal_init:
+            print("------use orthogonal init------")
+            orthogonal_init(self.actor_fc1)
+            orthogonal_init(self.actor_rnn)
+            orthogonal_init(self.actor_fc2, gain=0.01)
+            # orthogonal_init(self.critic_fc1)
+            # orthogonal_init(self.critic_rnn)
+            # orthogonal_init(self.critic_fc2)
+
+    def forward(self, s):
+        s = self.activate_func(self.actor_fc1(s))
+        output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
+        logit = self.actor_fc2(output)
+        return logit
+    #
+    # def critic(self, s):
+    #     s = self.activate_func(self.critic_fc1(s))
+    #     output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
+    #     value = self.critic_fc2(output)
+    #     return value
 
 
-class PPO_discrete_Transformer:
+class Critic_RNN(nn.Module):
+    def __init__(self, args):
+        super(Critic_RNN, self).__init__()
+        self.use_gru = args.use_gru
+        self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
+
+        # self.actor_rnn_hidden = None
+        # self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        # if args.use_gru:
+        #     print("------use GRU------")
+        #     self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        # else:
+        #     print("------use LSTM------")
+        #     self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
+        # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
+
+        self.critic_rnn_hidden = None
+        self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        if args.use_gru:
+            self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
+        else:
+            self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
+        self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
+
+        if args.use_orthogonal_init:
+            print("------use orthogonal init------")
+            # orthogonal_init(self.actor_fc1)
+            # orthogonal_init(self.actor_rnn)
+            # orthogonal_init(self.actor_fc2, gain=0.01)
+            orthogonal_init(self.critic_fc1)
+            orthogonal_init(self.critic_rnn)
+            orthogonal_init(self.critic_fc2)
+
+    # def actor(self, s):
+    #     s = self.activate_func(self.actor_fc1(s))
+    #     output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
+    #     logit = self.actor_fc2(output)
+    #     return logit
+
+    def forward(self, s):
+        s = self.activate_func(self.critic_fc1(s))
+        output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
+        value = self.critic_fc2(output)
+        return value
+
+
+class PPO_discrete_RNN:
     def __init__(self, args):
         self.batch_size = args.batch_size
         self.mini_batch_size = args.mini_batch_size
@@ -199,29 +246,28 @@ class PPO_discrete_Transformer:
         self.use_lr_decay = args.use_lr_decay
         self.use_adv_norm = args.use_adv_norm
 
-        self.transformer_max_len = args.transformer_max_len
-
-        # self.ac = Actor_Critic_Transformer(args)
-
+        # self.ac = Actor_Critic_RNN(args)
+        # self.actor = Actor_RNN(args)
+        # self.critic = Critic_RNN(args)
         self.actor = Actor_Transformer(args)
         self.critic = Critic_Transformer(args)
-
+        # self.actor.eval()
+        # self.critic.eval()
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr, eps=1e-5)
             self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr, eps=1e-5)
         else:
-            pass
-            # self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
+            self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
+            self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
 
-    # def reset_rnn_hidden(self):
-    #     self.ac.actor_rnn_hidden = None
-    #     self.ac.critic_rnn_hidden = None
+    def reset_rnn_hidden(self):
+        self.actor.actor_rnn_hidden = None
+        self.critic.critic_rnn_hidden = None
 
     def choose_action(self, s, evaluate=False):
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
-            # Get output from the last observation
-            logit = self.actor(s)[:, -1]
+            logit = self.actor(s)
             if evaluate:
                 a = torch.argmax(logit)
                 return a.item(), None
@@ -234,6 +280,28 @@ class PPO_discrete_Transformer:
     def get_value(self, s):
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            value = self.critic(s)
+            return value.item()
+
+    def choose_action_transformer(self, s, evaluate=False):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            # Get output from the last observation
+            # torch.manual_seed(0)
+            logit = self.actor(s)[:, -1]
+            if evaluate:
+                a = torch.argmax(logit)
+                return a.item(), None
+            else:
+                dist = Categorical(logits=logit)
+                a = dist.sample()
+                a_logprob = dist.log_prob(a)
+                return a.item(), a_logprob.item()
+
+    def get_value_transformer(self, s):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            # torch.manual_seed(0)
             value = self.critic(s)[:, -1]
             return value.item()
 
@@ -241,23 +309,17 @@ class PPO_discrete_Transformer:
         self.actor = self.actor.to(device)
         self.critic = self.critic.to(device)
 
-        batch = replay_buffer.get_training_data_fixed_length(device=device,
-                                                             target_len=self.transformer_max_len)  # Get training data
+        batch = replay_buffer.get_training_data(device, self.critic)  # Get training data
 
         # Optimize policy for K epochs:
         actor_losses = []
         critic_losses = []
 
-        new_batch_size = batch['s'].size(0)
-        new_mini_batch_size = int(self.mini_batch_size * new_batch_size / self.batch_size)
-
-        logging.info('New batch size: {}'.format(new_batch_size))
-        logging.info('New mini batch size: {}'.format(new_mini_batch_size))
-
+        # Optimize policy for K epochs:
         for _ in range(self.K_epochs):
-            for index in BatchSampler(SequentialSampler(range(new_batch_size)), new_mini_batch_size, False):
+            for index in BatchSampler(SequentialSampler(range(self.batch_size)), self.mini_batch_size, False):
                 # If use RNN, we need to reset the rnn_hidden of the actor and critic.
-                # self.reset_rnn_hidden()
+                self.reset_rnn_hidden()
                 logits_now = self.actor(
                     batch['s'][index])  # logits_now.shape=(mini_batch_size, max_episode_len, action_dim)
                 values_now = self.critic(batch['s'][index]).squeeze(
@@ -279,6 +341,7 @@ class PPO_discrete_Transformer:
                 # critic_loss
                 critic_loss = (values_now - batch['v_target'][index]) ** 2
                 critic_loss = (critic_loss * batch['active'][index]).sum() / batch['active'][index].sum()
+                critic_loss = critic_loss * 0.5
 
                 actor_losses.append(actor_loss.item())
                 critic_losses.append(critic_loss.item())
@@ -288,12 +351,12 @@ class PPO_discrete_Transformer:
                 self.optim_critic.zero_grad()
 
                 actor_loss.backward()
-                (critic_loss * 0.5).backward()
-                # loss = actor_loss + critic_loss * 0.5
-                # loss.backward()
+                critic_loss.backward()
+
                 if self.use_grad_clip:  # Trick 7: Gradient clip
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+
                 self.optim_actor.step()
                 self.optim_critic.step()
 
@@ -309,16 +372,11 @@ class PPO_discrete_Transformer:
         for p in self.optim_critic.param_groups:
             p['lr'] = lr_now
 
-    def save_model(self, env_name, number, seed, total_steps):
-        torch.save(self.actor.state_dict(),
-                   "./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
-                                                                                    int(total_steps / 1000)))
-        torch.save(self.critic.state_dict(),
-                   "./model/PPO_critic_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
-                                                                                     int(total_steps / 1000)))
-
-    def load_model(self, env_name, number, seed, step):
-        self.actor.load_state_dict(
-            torch.load("./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))
-        self.critic.load_state_dict(
-            torch.load("./model/PPO_critic_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))
+    # def save_model(self, env_name, number, seed, total_steps):
+    #     torch.save(self.ac.state_dict(),
+    #                "./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
+    #                                                                                 int(total_steps / 1000)))
+    #
+    # def load_model(self, env_name, number, seed, step):
+    #     self.ac.load_state_dict(
+    #         torch.load("./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))
