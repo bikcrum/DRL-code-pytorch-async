@@ -230,7 +230,7 @@ class Critic_RNN(nn.Module):
         return value
 
 
-class PPO_discrete_RNN:
+class PPO_discrete_Transformer:
     def __init__(self, args):
         self.batch_size = args.batch_size
         self.mini_batch_size = args.mini_batch_size

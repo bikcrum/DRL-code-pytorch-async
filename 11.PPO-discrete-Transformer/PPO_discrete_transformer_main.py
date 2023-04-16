@@ -9,7 +9,7 @@ import gym
 import argparse
 from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
-from ppo_discrete_rnn import PPO_discrete_RNN
+from ppo_discrete_transformer import PPO_discrete_Transformer
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -38,7 +38,7 @@ class Runner:
         print("episode_limit={}".format(args.episode_limit))
 
         self.replay_buffer = ReplayBuffer(args)
-        self.agent = PPO_discrete_RNN(args)
+        self.agent = PPO_discrete_Transformer(args)
 
         # Create a tensorboard
         self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
