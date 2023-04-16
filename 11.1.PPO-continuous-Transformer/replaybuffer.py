@@ -22,8 +22,8 @@ class ReplayBuffer:
     def reset_buffer(self):
         self.buffer = {'s': np.zeros([self.batch_size, self.episode_limit + 1, self.state_dim]),
                        # 'v': np.zeros([self.batch_size, self.episode_limit + 1]),
-                       'a': np.zeros([self.batch_size, self.episode_limit]),
-                       'a_logprob': np.zeros([self.batch_size, self.episode_limit]),
+                       'a': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
+                       'a_logprob': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
                        'r': np.zeros([self.batch_size, self.episode_limit]),
                        'dw': np.ones([self.batch_size, self.episode_limit]),
                        # Note: We use 'np.ones' to initialize 'dw'
@@ -105,7 +105,7 @@ class ReplayBuffer:
         v_next[~active] = 0
 
         s = s[:, :-1]
-        a = torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.long, device=device)
+        a = torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.float32, device=device)
         a_logprob = torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float32,
                                  device=device)
         r = torch.tensor(self.buffer['r'][:, :self.max_episode_len], dtype=torch.float32, device=device)

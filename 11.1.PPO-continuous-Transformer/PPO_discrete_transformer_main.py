@@ -4,7 +4,7 @@ import logging
 import torch
 import numpy as np
 import wandb
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 import gym
 import argparse
 from normalization import Normalization, RewardScaling
@@ -30,7 +30,8 @@ class Runner:
         self.env.action_space.seed(seed)
 
         self.args.state_dim = self.env.observation_space.shape[0]
-        self.args.action_dim = self.env.action_space.n
+        self.args.action_dim = self.env.action_space.shape[0]
+        args.max_action = float(self.env.action_space.high[0])
         self.args.episode_limit = self.env._max_episode_steps  # Maximum number of steps per episode
         print("env={}".format(env_name))
         print("state_dim={}".format(args.state_dim))
@@ -41,7 +42,7 @@ class Runner:
         self.agent = PPO_discrete_Transformer(args)
 
         # Create a tensorboard
-        self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
+        # self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
 
         self.evaluate_rewards = []  # Record the rewards during the evaluating
         self.total_steps = 0
@@ -148,7 +149,8 @@ class Runner:
                 # v = self.agent.get_value_transformer(state_buffer)
                 # a, a_logprob = self.agent.choose_action(s, evaluate=False)
                 # v = self.agent.get_value(s)
-                s_, r, done, _ = self.env.step(a)
+                # s_, r, done, _ = self.env.step(a)
+                s_, r, done, _ = self.env.step(a.flatten().detach().numpy() * self.args.max_action)
                 episode_reward += r
                 episode_step += 1
 
@@ -207,7 +209,7 @@ class Runner:
                 state_buffer.append(s)
                 a, a_logprob = self.agent.choose_action_transformer(state_buffer, evaluate=True)
                 # a, a_logprob = self.agent.choose_action(s, evaluate=True)
-                s_, r, done, _ = self.env.step(a)
+                s_, r, done, _ = self.env.step(a.flatten().detach().numpy() * self.args.max_action)
                 episode_reward += r
                 episode_length += 1
                 s = s_
@@ -240,13 +242,13 @@ if __name__ == '__main__':
     parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument('--transformer_max_len', type=int, default=200, help='max length of sequence')
+    parser.add_argument('--transformer_max_len', type=int, default=256, help='max length of sequence')
     parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
-    parser.add_argument("--K_epochs", type=int, default=15, help="PPO parameter")
+    parser.add_argument("--K_epochs", type=int, default=10, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
@@ -260,8 +262,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 0
+    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 2
     seed = 0
     runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
     runner.run()
