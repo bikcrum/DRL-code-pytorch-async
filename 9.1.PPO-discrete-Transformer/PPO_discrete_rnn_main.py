@@ -135,7 +135,12 @@ class Runner:
 
             # self.agent.reset_rnn_hidden()
             state_buffer = []
-            for seq_step in range(self.args.transformer_max_len):
+            if self.args.transformer_randomize_len:
+                max_seq_length = np.random.randint(1, self.args.transformer_max_len + 1)
+            else:
+                max_seq_length = self.args.transformer_max_len
+
+            for seq_step in range(max_seq_length):
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
                 state_buffer.append(s)
@@ -231,11 +236,12 @@ if __name__ == '__main__':
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
     parser.add_argument("--evaluate_times", type=float, default=3, help="Evaluate times")
 
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=8, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument('--transformer_max_len', type=int, default=250, help='max length of sequence')
+    parser.add_argument('--transformer_max_len', type=int, default=200, help='max length of sequence')
+    parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
@@ -255,7 +261,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 1
+    env_index = 0
     seed = 0
     runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
     runner.run()
