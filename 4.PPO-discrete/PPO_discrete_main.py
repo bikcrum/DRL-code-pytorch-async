@@ -190,5 +190,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_name = ['CartPole-v1', 'LunarLander-v2']
-    env_index = 1
+    env_index = 0
     main(args, env_name=env_name[env_index], number=1, seed=0)
