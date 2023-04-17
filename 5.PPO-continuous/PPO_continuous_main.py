@@ -166,7 +166,7 @@ def main(args, env_name, number, seed):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameters Setting for PPO-continuous")
-    parser.add_argument("--max_train_steps", type=int, default=int(3e6), help=" Maximum number of training steps")
+    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
@@ -194,6 +194,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_name = ['Pendulum-v1', 'BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
-    env_index = 1
+    env_name = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
+    env_index = 2
     main(args, env_name=env_name[env_index], number=1, seed=10)

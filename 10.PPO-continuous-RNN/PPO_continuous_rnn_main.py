@@ -1,8 +1,10 @@
+import datetime
 import logging
 
 import torch
 import numpy as np
 import tqdm
+import wandb
 from torch.utils.tensorboard import SummaryWriter
 import gym
 import argparse
@@ -52,25 +54,69 @@ class Runner:
             self.reward_scaling = RewardScaling(shape=1, gamma=self.args.gamma)
 
     def run(self, ):
-        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
+        time_now = datetime.datetime.now()
+
+        wandb.init(
+            entity='team-osu',
+            project=f'toy-test-{self.env_name}',
+            name=str(time_now),
+            config=args.__dict__
+        )
+
+        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
         evaluate_num = -1  # Record the number of evaluations
+        prev_total_steps = 0  # Record the number of evaluations
+
         while self.total_steps < self.args.max_train_steps:
-            if self.total_steps // self.args.evaluate_freq > evaluate_num:
+            if self.total_steps - prev_total_steps >= args.evaluate_freq:
                 logging.info('Evaluating the policy ...')
-                self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                ep_reward, ep_len = self.evaluate_policy()  # Evaluate the policy every 'evaluate_freq' steps
+                prev_total_steps = self.total_steps
+
                 evaluate_num += 1
 
+                log = {
+                    "episode_reward_eval": ep_reward,
+                    "episode_length_eval": ep_len,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                }
+
+                logging.info(log)
+
+                wandb.log(log, step=self.total_steps)
+
             logging.info('Collecting experience ...')
-            _, episode_steps = self.run_episode()  # Run an episode
-            self.total_steps += episode_steps
+            ep_reward, ep_len = self.run_episode()  # Run an episode
+            self.total_steps += ep_len
+
+            log = {
+                "episode_reward": ep_reward,
+                "episode_length": ep_len,
+                "total_steps": self.total_steps,
+                "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+            }
+            logging.info(log)
+
+            wandb.log(log, step=self.total_steps)
 
             if self.replay_buffer.episode_num == self.args.batch_size:
                 logging.info('Training the policy ...')
-                actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps, device_optim)  # Training
+                actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
+                                                           device_optim)  # Training
                 self.agent.actor = self.agent.actor.to(device_collector)
                 self.agent.critic = self.agent.critic.to(device_collector)
-                logging.info('total_steps:{} \t actor_loss:{} \t critic_loss:{}'.format(self.total_steps, actor_loss,
-                                                                                        critic_loss))
+
+                log = {
+                    "actor_loss": actor_loss,
+                    "critic_loss": critic_loss,
+                    "total_steps": self.total_steps,
+                    "time_elapsed": str((datetime.datetime.now() - time_now).total_seconds())
+                }
+                logging.info(log)
+
+                wandb.log(log, step=self.total_steps)
+
                 self.replay_buffer.reset_buffer()
 
         self.evaluate_policy()
@@ -112,8 +158,9 @@ class Runner:
 
     def evaluate_policy(self, ):
         evaluate_reward = 0
+        evaluate_length = 0
         for _ in range(self.args.evaluate_times):
-            episode_reward, done = 0, False
+            episode_reward, episode_length, done = 0, 0, False
             s = self.env.reset()
             self.agent.reset_rnn_hidden()
             while not done:
@@ -122,17 +169,22 @@ class Runner:
                 a, a_logprob = self.agent.choose_action(s, evaluate=True)
                 s_, r, done, _ = self.env.step(a.detach().numpy().flatten() * self.args.max_action)
                 episode_reward += r
+                episode_length += 1
                 s = s_
             evaluate_reward += episode_reward
+            evaluate_length += episode_length
 
         evaluate_reward = evaluate_reward / self.args.evaluate_times
-        self.evaluate_rewards.append(evaluate_reward)
-        print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
-        self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
-                               global_step=self.total_steps)
-        # Save the rewards and models
-        np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
-                np.array(self.evaluate_rewards))
+        evaluate_length = evaluate_length / self.args.evaluate_times
+        # self.evaluate_rewards.append(evaluate_reward)
+        # print("total_steps:{} \t evaluate_reward:{}".format(self.total_steps, evaluate_reward))
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+        #                        global_step=self.total_steps)
+        # # Save the rewards and models
+        # np.save('./data_train/PPO_env_{}_number_{}_seed_{}.npy'.format(self.env_name, self.number, self.seed),
+        #         np.array(self.evaluate_rewards))
+
+        return evaluate_reward, evaluate_length
 
 
 if __name__ == '__main__':
@@ -165,8 +217,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 1
-    for seed in [0, 10, 100]:
-        runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
-        runner.run()
+    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 2
+
+    seed = 0
+    runner = Runner(args, env_name=env_names[env_index], number=3, seed=seed)
+    runner.run()

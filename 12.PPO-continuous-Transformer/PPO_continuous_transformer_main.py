@@ -9,7 +9,7 @@ import gym
 import argparse
 from normalization import Normalization, RewardScaling
 from replaybuffer import ReplayBuffer
-from ppo_continuous_transformer import PPO_continuous_Transformer
+from ppo_continuous_transformer import PPO_continuous
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -39,7 +39,7 @@ class Runner:
         print("episode_limit={}".format(args.episode_limit))
 
         self.replay_buffer = ReplayBuffer(args)
-        self.agent = PPO_continuous_Transformer(args)
+        self.agent = PPO_continuous(args)
 
         # Create a tensorboard
         # self.writer = SummaryWriter(log_dir='runs/PPO_discrete/env_{}_number_{}_seed_{}'.format(env_name, number, seed))
@@ -61,11 +61,11 @@ class Runner:
             entity='team-osu',
             project=f'toy-test-{self.env_name}',
             name=str(time_now),
-            # mode='disabled',
+            mode='disabled',
             config=args.__dict__
         )
 
-        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
         prev_total_steps = 0
 
         while self.total_steps < self.args.max_train_steps:
@@ -99,7 +99,7 @@ class Runner:
 
             wandb.log(log, step=self.total_steps)
 
-            actor_loss, critic_loss = self.agent.train(self.replay_buffer, self.total_steps,
+            actor_loss, critic_loss, entropy, entropy_bonus = self.agent.update([self.replay_buffer], self.total_steps,
                                                        device_optim)  # Training
 
             self.agent.actor = self.agent.actor.to(device_collector)
@@ -108,6 +108,8 @@ class Runner:
             log = {
                 "actor_loss": actor_loss,
                 "critic_loss": critic_loss,
+                'entropy': entropy,
+                'entropy_bonus': entropy_bonus,
                 "total_steps": self.total_steps,
                 "time_elapsed": (datetime.datetime.now() - time_now).total_seconds()
             }
@@ -244,7 +246,8 @@ if __name__ == '__main__':
                         help="The number of neurons in hidden layers of the neural network")
     parser.add_argument('--transformer_max_len', type=int, default=256, help='max length of sequence')
     parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate of actor")
+    parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
+    parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")

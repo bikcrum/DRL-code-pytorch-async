@@ -1,17 +1,21 @@
-import logging
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import wandb
-from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler, SequentialSampler
-from torch.distributions import Categorical, Normal
-import copy
+from torch.distributions import Beta, Normal
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
+from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
+from replaybuffer import ReplayBuffer
 
-logging.getLogger().setLevel(logging.INFO)
 
+# Trick 8: orthogonal initialization
+
+
+# def orthogonal_init(layer, gain=1.0):
+#     nn.init.orthogonal_(layer.weight, gain=gain)
+#     nn.init.constant_(layer.bias, 0)
 
 # Trick 8: orthogonal initialization
 def orthogonal_init(layer, gain=np.sqrt(2)):
@@ -22,7 +26,6 @@ def orthogonal_init(layer, gain=np.sqrt(2)):
             nn.init.orthogonal_(param, gain=gain)
 
     return layer
-
 
 class PositionalEncoding(nn.Module):
 
@@ -161,7 +164,7 @@ class Actor_RNN(nn.Module):
         self.use_gru = args.use_gru
         self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
 
-        self.actor_rnn_hidden = None
+        self.rnn_hidden = None
         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
         if args.use_gru:
             print("------use GRU------")
@@ -169,36 +172,53 @@ class Actor_RNN(nn.Module):
         else:
             print("------use LSTM------")
             self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-        self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
 
-        # self.critic_rnn_hidden = None
-        # self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-        # if args.use_gru:
-        #     self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
-        # else:
-        #     self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-        # self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
+        self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        self.log_std_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
             orthogonal_init(self.actor_fc1)
             orthogonal_init(self.actor_rnn)
-            orthogonal_init(self.actor_fc2, gain=0.01)
-            # orthogonal_init(self.critic_fc1)
-            # orthogonal_init(self.critic_rnn)
-            # orthogonal_init(self.critic_fc2)
+            orthogonal_init(self.mean_layer, gain=0.01)
+            orthogonal_init(self.log_std_layer, gain=0.01)
+
+    # def forward(self, s):
+    #     s = self.activate_func(self.actor_fc1(s))
+    #     output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
+    #     logit = self.actor_fc2(output)
+    #     return logit
+
+    # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
+
+    def to(self, device):
+        if self.rnn_hidden is not None:
+            self.rnn_hidden = self.rnn_hidden.to(device)
+        super().to(device)
+        return self
 
     def forward(self, s):
+
         s = self.activate_func(self.actor_fc1(s))
-        output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
-        logit = self.actor_fc2(output)
-        return logit
-    #
-    # def critic(self, s):
-    #     s = self.activate_func(self.critic_fc1(s))
-    #     output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
-    #     value = self.critic_fc2(output)
-    #     return value
+        output, self.rnn_hidden = self.actor_rnn(s, self.rnn_hidden)
+        # logit = self.actor_fc2(output)
+
+        # Tanh because log_std range is [-1, 1]
+        mean = F.tanh(self.mean_layer(output))
+        # mean: [batch_size, seq_len, action_dim]
+
+        # Tanh because log_std range is [-1, 1]
+        log_std = F.tanh(self.log_std_layer(output))
+        # log_std: [batch_size, seq_len, action_dim]
+
+        return mean, log_std
+
+    def get_distribution(self, s):
+        mean, log_std = self.forward(s)
+        # Exp to make std positive
+        std = log_std.exp()
+        return Normal(mean, std)
 
 
 class Critic_RNN(nn.Module):
@@ -207,52 +227,46 @@ class Critic_RNN(nn.Module):
         self.use_gru = args.use_gru
         self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
 
-        # self.actor_rnn_hidden = None
-        # self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
-        # if args.use_gru:
-        #     print("------use GRU------")
-        #     self.actor_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
-        # else:
-        #     print("------use LSTM------")
-        #     self.actor_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
-        # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
-
-        self.critic_rnn_hidden = None
+        self.rnn_hidden = None
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
         if args.use_gru:
+            print("------use GRU------")
             self.critic_rnn = nn.GRU(args.hidden_dim, args.hidden_dim, batch_first=True)
         else:
+            print("------use LSTM------")
             self.critic_rnn = nn.LSTM(args.hidden_dim, args.hidden_dim, batch_first=True)
         self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
-            # orthogonal_init(self.actor_fc1)
-            # orthogonal_init(self.actor_rnn)
-            # orthogonal_init(self.actor_fc2, gain=0.01)
             orthogonal_init(self.critic_fc1)
             orthogonal_init(self.critic_rnn)
             orthogonal_init(self.critic_fc2)
 
-    # def actor(self, s):
-    #     s = self.activate_func(self.actor_fc1(s))
-    #     output, self.actor_rnn_hidden = self.actor_rnn(s, self.actor_rnn_hidden)
-    #     logit = self.actor_fc2(output)
-    #     return logit
+    def to(self, device):
+        if self.rnn_hidden is not None:
+            self.rnn_hidden = self.rnn_hidden.to(device)
+        super().to(device)
+        return self
 
     def forward(self, s):
         s = self.activate_func(self.critic_fc1(s))
-        output, self.critic_rnn_hidden = self.critic_rnn(s, self.critic_rnn_hidden)
+        output, self.rnn_hidden = self.critic_rnn(s, self.rnn_hidden)
         value = self.critic_fc2(output)
         return value
 
 
-class PPO_continuous_Transformer:
+class PPO_continuous():
     def __init__(self, args):
+        self.args = args
+        # self.policy_dist = args.policy_dist
+        # self.min_action = torch.tensor(args.max_action)
+        # self.max_action = torch.tensor(args.max_action)
         self.batch_size = args.batch_size
         self.mini_batch_size = args.mini_batch_size
         self.max_train_steps = args.max_train_steps
-        self.lr = args.lr  # Learning rate of actor
+        self.lr_a = args.lr_a  # Learning rate of actor
+        self.lr_c = args.lr_c  # Learning rate of critic
         self.gamma = args.gamma  # Discount factor
         self.lamda = args.lamda  # GAE parameter
         self.epsilon = args.epsilon  # PPO clip parameter
@@ -263,42 +277,43 @@ class PPO_continuous_Transformer:
         self.use_lr_decay = args.use_lr_decay
         self.use_adv_norm = args.use_adv_norm
 
-        # self.ac = Actor_Critic_RNN(args)
-        # self.actor = Actor_RNN(args)
-        # self.critic = Critic_RNN(args)
-        self.actor = Actor_Transformer(args)
-        self.critic = Critic_Transformer(args)
-        # self.actor.eval()
-        # self.critic.eval()
+        self.actor = Actor_RNN(args)
+        self.critic = Critic_RNN(args)
+
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
-            self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr, eps=1e-5)
-            self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr, eps=1e-5)
+            self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a, eps=1e-5)
+            self.optimizer_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr_c, eps=1e-5)
         else:
-            self.optim_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
-            self.optim_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
+            self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a)
+            self.optimizer_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr_c)
 
     def reset_rnn_hidden(self):
-        self.actor.actor_rnn_hidden = None
-        self.critic.critic_rnn_hidden = None
+        self.critic.rnn_hidden = None
+        self.actor.rnn_hidden = None
+    # def evaluate(self, s, device):  # When evaluating the policy, we only use the mean
+    #     s1, s2 = s
+    #     s1 = torch.unsqueeze(torch.tensor(s1, dtype=torch.float, device=device), 0)
+    #     s2 = torch.unsqueeze(torch.tensor(s2, dtype=torch.float, device=device), 0)
+    #     if self.policy_dist == "Beta":
+    #         a = self.actor.mean(s).detach().cpu().numpy().flatten()
+    #     else:
+    #         a = self.actor(s1, s2).detach().cpu().numpy().flatten()
+    #     return a
 
-    def choose_action(self, s, evaluate=False):
-        with torch.no_grad():
-            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
-            logit = self.actor(s)
-            if evaluate:
-                a = torch.argmax(logit)
-                return a.item(), None
-            else:
-                dist = Categorical(logits=logit)
-                a = dist.sample()
-                a_logprob = dist.log_prob(a)
-                return a.item(), a_logprob.item()
-
-    def get_value(self, s):
-        with torch.no_grad():
-            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
-            value = self.critic(s)
-            return value.item()
+    # def choose_action(self, s):
+    #     s = torch.unsqueeze(torch.tensor(s, dtype=torch.float), 0)
+    #     if self.policy_dist == "Beta":
+    #         with torch.no_grad():
+    #             dist = self.actor.get_dist(s)
+    #             a = dist.sample()  # Sample the action according to the probability distribution
+    #             a_logprob = dist.log_prob(a)  # The log probability density of the action
+    #     else:
+    #         with torch.no_grad():
+    #             dist = self.actor.get_dist(s)
+    #             a = dist.sample()  # Sample the action according to the probability distribution
+    #             a = torch.clamp(a, -1.0, 1.0)  # [-max,max]
+    #             a_logprob = dist.log_prob(a)  # The log probability density of the action
+    #     return a.numpy().flatten(), a_logprob.numpy().flatten()
 
     def choose_action_transformer(self, s, evaluate=False):
 
@@ -339,22 +354,89 @@ class PPO_continuous_Transformer:
             value = self.critic(s)[:, -1]
             return value.item()
 
-    def train(self, replay_buffer, total_steps, device):
+    def update(self, replay_buffers, total_steps, device):
         self.actor = self.actor.to(device)
         self.critic = self.critic.to(device)
+        # self.actor.min_action = self.actor.min_action.to(device)
+        # self.actor.max_action = self.actor.max_action.to(device)
+        # self.min_action = self.min_action.to(device)
+        # self.max_action = self.max_action.to(device)
 
-        batch = replay_buffer.get_training_data(device, self.critic)  # Get training data
+        # s, a, a_logprob, r, s_, dw, done, ep_end_lens = replay_buffer.numpy_to_tensor(
+        #     device=device)  # Get training data
+        # """
+        #     Calculate the advantage using GAE
+        #     'dw=True' means dead or win, there is no next state s'
+        #     'done=True' represents the terminal of an episode(dead or win or reaching the max_episode_steps). When calculating the adv, if done=True, gae=0
+        # """
+        # adv = []
+        # gae = 0
+        # with torch.no_grad():  # adv and v_target have no gradient
+        #     # Terminology:
+        #     # S = episode length
+        #     # B = batch size
+        #
+        #     s1, s2 = s
+        #     # Do non-recurrent forward to get values
+        #     vs = self.critic.forward_ff(s1, s2)
+        #
+        #     s1_, s2_ = s_
+        #     # Do non-recurrent forward to get values
+        #     vs_ = self.critic.forward_ff(s1_, s2_)
+        #
+        #     # Get sizes for each episode
+        #     ep_sizes = torch.concat((ep_end_lens[:1], ep_end_lens[1:] - ep_end_lens[:-1]))
+        #
+        #     # Split values by episode size into a batch. We have converted collection of episode in 1-D array to
+        #     # a batch of episodes
+        #     vs = vs.split(ep_sizes.tolist())
+        #     vs_ = vs_.split(ep_sizes.tolist())
+        #
+        #     # Pad all episode in a batch by value 0. (S, B, D)
+        #     vs = pad_sequence(vs)
+        #     vs_ = pad_sequence(vs_)
+        #
+        #     S, B, D = vs.size()
+        #
+        #     # Get true mask for padded values (B, S)
+        #     src_key_padding_mask = torch.arange(S, device=device) >= ep_sizes.unsqueeze(1)
+        #
+        #     # Now we have a batch of episodes and each episode has observations. We do attention for each observation
+        #     # with observations appearing before it (taken care by 'mask') and also indicate where padding for
+        #     # episode is applied (taken care by 'src_key_padding_mask').
+        #     mask = nn.Transformer.generate_square_subsequent_mask(S).to(device)
+        #     vs = self.critic.forward_transformer(vs,
+        #                                          mask=mask,
+        #                                          src_key_padding_mask=src_key_padding_mask)
+        #
+        #     vs_ = self.critic.forward_transformer(vs_,
+        #                                           mask=mask,
+        #                                           src_key_padding_mask=src_key_padding_mask)
+        #
+        #     # (S, B, 1) -> (B, S, 1) -> masking -> (BxS, 1)
+        #     vs = vs.permute(1, 0, 2)[~src_key_padding_mask]
+        #     vs_ = vs_.permute(1, 0, 2)[~src_key_padding_mask]
+        #
+        #     deltas = r + self.gamma * (1.0 - dw) * vs_ - vs
+        #     for delta, d in zip(reversed(deltas.flatten()), reversed(done.flatten())):
+        #         gae = delta + self.gamma * self.lamda * gae * (1.0 - d)
+        #         adv.insert(0, gae)
+        #     adv = torch.tensor(adv, dtype=torch.float, device=device).view(-1, 1)
+        #     v_target = adv + vs
+        #     if self.use_adv_norm:  # Trick 1:advantage normalization
+        #         adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
 
+        losses = []
+        entropies = []
+        # ep_start_indices = torch.concat((torch.LongTensor([0]).to(device), ep_end_lens))
         # Optimize policy for K epochs:
-        actor_losses = []
-        critic_losses = []
 
-        # Optimize policy for K epochs:
+        batch = ReplayBuffer.create_batch(replay_buffers, self.args, self.critic, device)
+
         for _ in range(self.K_epochs):
-            for index in BatchSampler(SequentialSampler(range(self.batch_size)), self.mini_batch_size, False):
-                # If use RNN, we need to reset the rnn_hidden of the actor and critic.
-                # self.reset_rnn_hidden()
-
+            # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
+            for index in BatchSampler(SubsetRandomSampler(range(self.batch_size)), self.mini_batch_size, False):
+                self.reset_rnn_hidden()
                 dist_now = self.actor.get_distribution(
                     batch['s'][index])  # logits_now.shape=(mini_batch_size, max_episode_len, action_dim)
                 values_now = self.critic(batch['s'][index]).squeeze(
@@ -378,12 +460,11 @@ class PPO_continuous_Transformer:
                 critic_loss = (critic_loss * batch['active'][index]).sum() / batch['active'][index].sum()
                 critic_loss = critic_loss * 0.5
 
-                actor_losses.append(actor_loss.item())
-                critic_losses.append(critic_loss.item())
+                losses.append((actor_loss.item(), critic_loss.item()))
 
                 # Update
-                self.optim_actor.zero_grad()
-                self.optim_critic.zero_grad()
+                self.optimizer_actor.zero_grad()
+                self.optimizer_critic.zero_grad()
 
                 actor_loss.backward()
                 critic_loss.backward()
@@ -392,26 +473,27 @@ class PPO_continuous_Transformer:
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
 
-                self.optim_actor.step()
-                self.optim_critic.step()
+                self.optimizer_actor.step()
+                self.optimizer_critic.step()
+
+                mean_entropy = dist_entropy.mean().item()
+                entropies.append((mean_entropy, - self.entropy_coef * mean_entropy))
 
         if self.use_lr_decay:  # Trick 6:learning rate Decay
             self.lr_decay(total_steps)
 
-        return np.mean(actor_losses), np.mean(critic_losses)
+        a_loss, c_loss = zip(*losses)
+        entropy, entropy_bonus = zip(*entropies)
+
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+
+        return np.mean(a_loss), np.mean(c_loss), np.mean(entropy), np.mean(entropy_bonus)
 
     def lr_decay(self, total_steps):
-        lr_now = 0.9 * self.lr * (1 - total_steps / self.max_train_steps) + 0.1 * self.lr
-        for p in self.optim_actor.param_groups:
-            p['lr'] = lr_now
-        for p in self.optim_critic.param_groups:
-            p['lr'] = lr_now
-
-    # def save_model(self, env_name, number, seed, total_steps):
-    #     torch.save(self.ac.state_dict(),
-    #                "./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed,
-    #                                                                                 int(total_steps / 1000)))
-    #
-    # def load_model(self, env_name, number, seed, step):
-    #     self.ac.load_state_dict(
-    #         torch.load("./model/PPO_actor_env_{}_number_{}_seed_{}_step_{}k.pth".format(env_name, number, seed, step)))
+        lr_a_now = self.lr_a * (1 - total_steps / self.max_train_steps)
+        lr_c_now = self.lr_c * (1 - total_steps / self.max_train_steps)
+        for p in self.optimizer_actor.param_groups:
+            p['lr'] = lr_a_now
+        for p in self.optimizer_critic.param_groups:
+            p['lr'] = lr_c_now
