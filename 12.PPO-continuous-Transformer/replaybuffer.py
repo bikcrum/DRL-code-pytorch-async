@@ -12,7 +12,7 @@ class ReplayBuffer:
         self.use_adv_norm = args.use_adv_norm
         self.state_dim = args.state_dim
         self.action_dim = args.action_dim
-        self.episode_limit = args.episode_limit
+        self.transformer_max_len = args.transformer_max_len
         self.batch_size = args.batch_size
         self.episode_num = 0
         self.max_episode_len = 0
@@ -20,14 +20,14 @@ class ReplayBuffer:
         self.reset_buffer()
 
     def reset_buffer(self):
-        self.buffer = {'s': np.zeros([self.batch_size, self.episode_limit + 1, self.state_dim]),
+        self.buffer = {'s': np.zeros([self.batch_size, self.transformer_max_len + 1, self.state_dim]),
                        # 'v': np.zeros([self.batch_size, self.episode_limit + 1]),
-                       'a': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
-                       'a_logprob': np.zeros([self.batch_size, self.episode_limit, self.action_dim]),
-                       'r': np.zeros([self.batch_size, self.episode_limit]),
-                       'dw': np.ones([self.batch_size, self.episode_limit]),
+                       'a': np.zeros([self.batch_size, self.transformer_max_len, self.action_dim]),
+                       'a_logprob': np.zeros([self.batch_size, self.transformer_max_len, self.action_dim]),
+                       'r': np.zeros([self.batch_size, self.transformer_max_len]),
+                       'dw': np.ones([self.batch_size, self.transformer_max_len]),
                        # Note: We use 'np.ones' to initialize 'dw'
-                       'active': np.zeros([self.batch_size, self.episode_limit])
+                       'active': np.zeros([self.batch_size, self.transformer_max_len])
                        }
         self.episode_num = 0
         self.max_episode_len = 0

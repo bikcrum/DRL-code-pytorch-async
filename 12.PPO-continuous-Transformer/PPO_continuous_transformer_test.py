@@ -1,4 +1,5 @@
 import argparse
+import collections
 import logging
 import os.path
 import select
@@ -12,7 +13,7 @@ import tqdm
 import wandb
 from normalization import Normalization
 
-from ppo_continuous_transformer import PPO_continuous
+from ppo_continuous_transformer import PPO_continuous, Actor_Transformer
 from PPO_continuous_transformer_main_async import get_device
 
 logging.basicConfig(level=logging.INFO)
@@ -24,33 +25,33 @@ def has_data():
 
 def evaluate_policy(env_name, run_name, replace=True, best=True):
     parser = argparse.ArgumentParser("Hyperparameters Setting for PPO-continuous-transformer")
-    parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=5e3,
-                        help="Evaluate the policy every 'evaluate_freq' steps")
-    # parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
-    parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
-    parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
-    parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
+    # parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
+    # parser.add_argument("--evaluate_freq", type=float, default=5e3,
+    #                     help="Evaluate the policy every 'evaluate_freq' steps")
+    # # parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
+    # parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
+    # parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
+    # parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
+    # parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    # parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=1600,
+    parser.add_argument("--transformer_max_len", type=int, default=1,
                         help="The maximum length of observation that transformed needed to attend backward")
-    parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
-    parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
-    parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
-    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
-    parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
-    parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
-    parser.add_argument("--K_epochs", type=int, default=10, help="PPO parameter")
-    parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
+    # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
+    # parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
+    # parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
+    # parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
+    # parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
+    # parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
+    # parser.add_argument("--K_epochs", type=int, default=10, help="PPO parameter")
+    # parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
-    parser.add_argument("--use_reward_norm", type=bool, default=False, help="Trick 3:reward normalization")
-    parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
-    parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
-    parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
-    parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
+    # parser.add_argument("--use_reward_norm", type=bool, default=False, help="Trick 3:reward normalization")
+    # parser.add_argument("--use_reward_scaling", type=bool, default=True, help="Trick 4:reward scaling")
+    # parser.add_argument("--entropy_coef", type=float, default=0.01, help="Trick 5: policy entropy")
+    # parser.add_argument("--use_lr_decay", type=bool, default=True, help="Trick 6:learning rate Decay")
+    # parser.add_argument("--use_grad_clip", type=bool, default=True, help="Trick 7: Gradient clip")
     parser.add_argument("--use_orthogonal_init", type=bool, default=True, help="Trick 8: orthogonal initialization")
     parser.add_argument("--set_adam_eps", type=float, default=True, help="Trick 9: set Adam epsilon=1e-5")
     parser.add_argument("--use_tanh", type=float, default=False, help="Trick 10: tanh activation function")
@@ -82,11 +83,11 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
 
     state_norm = Normalization(shape=args.state_dim)  # Trick 2:state normalization
 
-    agent = PPO_continuous(args)
+    actor = Actor_Transformer(args)
 
     wandb.login()
 
-    run = wandb.Api().run(os.path.join(f'toy-test-{env_name}', 'dcbxzkwo'))
+    run = wandb.Api().run(os.path.join(f'toy-test-{env_name}', 'dpxzfbxo'))
 
     os.makedirs('saved_models', exist_ok=True)
     os.makedirs('checkpoints', exist_ok=True)
@@ -99,7 +100,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
         with open(f'saved_models/agent-{run_name}.pth', 'rb') as r:
             checkpoint = torch.load(r, map_location=dev_inf)
 
-        agent.actor.load_state_dict(checkpoint)
+        actor.load_state_dict(checkpoint)
     else:
         if replace or not os.path.exists(f'checkpoints/checkpoint-{run_name}.pt'):
             run.file(name=f'checkpoints/checkpoint-{run_name}.pt').download(replace=replace)
@@ -107,7 +108,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
         with open(f'checkpoints/checkpoint-{run_name}.pt', 'rb') as r:
             checkpoint = torch.load(r, map_location=dev_inf)
 
-        agent.actor.load_state_dict(checkpoint['actor_state_dict'])
+        actor.load_state_dict(checkpoint['actor_state_dict'])
     # if best:
     #     ckpt = torch.load(f'saved_models/agent-{run_name}.pth', map_location=dev_inf)
     #     agent.actor.load_state_dict(ckpt)
@@ -133,7 +134,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
             s = s.unsqueeze(0)
             # s: [1, state_dim]
 
-            mean, _ = agent.actor(s)
+            mean, _ = actor(s)
             # mean: [1, action_dim]
 
             mean = mean.squeeze(0)
@@ -141,9 +142,28 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
 
             return mean.detach().numpy()
 
+    def choose_action_transformer(s, device):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float, device=device)
+
+            assert s.dim() == 2, "s1 must be 2D, [seq_len, state_dim]"
+
+            # Add batch dimension
+            s = s.unsqueeze(0)
+            # s1: [1, seq_len, state_dim]
+
+            mean, _ = actor(s)
+            # mean: [1, seq_len, action_dim]
+
+            # Get output from last observation
+            mean = mean.squeeze(0)[-1]
+            # mean: [action_dim]
+
+            return mean.detach().numpy()
+
     for _ in tqdm.tqdm(range(n_epoch)):
         s = env.reset()
-        agent.actor.rnn_hidden = None
+        # agent.actor.rnn_hidden = None
 
         if args.use_state_norm:
             s = state_norm(s, update=False)  # During the evaluating,update=False
@@ -151,8 +171,16 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
         done = False
         episode_length = 0
         episode_reward = 0
+
+        state_buffer = collections.deque(maxlen=args.transformer_max_len)
+
         while not done:
-            a = choose_action_rnn(s, dev_inf)
+
+            if len(state_buffer) == args.transformer_max_len:
+                state_buffer.popleft()
+            state_buffer.append(s)
+            # a = choose_action_rnn(s, dev_inf)
+            a = choose_action_transformer(state_buffer, dev_inf)
             # logging.info(f'Action:{a}')
             s_, r, done, info = env.step(a * args.max_action)
 
@@ -182,7 +210,7 @@ if __name__ == '__main__':
     env_index = 2
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-16 19:03:16.159673',
+                    run_name='2023-04-16 23:44:03.921178',
                     replace=True,
                     best=False)
     # random()

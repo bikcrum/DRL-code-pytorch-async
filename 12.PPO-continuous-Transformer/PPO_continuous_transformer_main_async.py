@@ -387,6 +387,7 @@ def main(args, env_name, seed):
         name=run_name,
         config=args.__dict__,
         # mode='disabled'
+        id=run_name.replace(':', '_'),
     )
 
     optimizer_to_device(agent.optimizer_actor, device=dev_optim)
@@ -552,11 +553,11 @@ if __name__ == '__main__':
     parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=1, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=8192, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=256, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=1600,
+    parser.add_argument("--transformer_max_len", type=int, default=1,
                         help="The maximum length of observation that transformed needed to attend backward")
     parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
