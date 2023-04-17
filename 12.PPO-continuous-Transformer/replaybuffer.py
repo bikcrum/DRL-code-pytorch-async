@@ -97,11 +97,11 @@ class ReplayBuffer:
         # v_next = torch.tensor(self.buffer['v'][:, 1:self.max_episode_len + 1], dtype=torch.float32, device=device)
 
         # torch.manual_seed(0)
-        value_function.rnn_hidden = None
+        # value_function.rnn_hidden = None
         v = value_function(s[:, :-1]).squeeze(-1)
 
         # torch.manual_seed(0)
-        value_function.rnn_hidden = None
+        # value_function.rnn_hidden = None
         v_last = value_function(s[:, 1:])[torch.arange(s.size(0)), -1]
         v_next = torch.cat((v[:, 1:], v_last), dim=-1)
 

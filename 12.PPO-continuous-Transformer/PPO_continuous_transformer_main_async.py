@@ -55,7 +55,7 @@ class Evaluator:
                 mean = mean.squeeze(0)[-1]
                 # mean: [action_dim]
 
-                return mean
+                return mean.detach().numpy()
 
         def choose_action_rnn(s, device):
             with torch.no_grad():
@@ -87,15 +87,15 @@ class Evaluator:
         episode_reward = 0
         curr_buf = collections.deque(maxlen=self.args.transformer_max_len)
 
-        reset_rnn_hidden()
+        # reset_rnn_hidden()
 
         while not done:
             if len(curr_buf) == self.args.transformer_max_len:
-                reset_rnn_hidden()
+                # reset_rnn_hidden()
                 curr_buf.popleft()
             curr_buf.append(s)
-            # a = choose_action_transformer(curr_buf, device)  # We use the deterministic policy during the evaluating
-            a = choose_action_rnn(s, device)  # We use the deterministic policy during the evaluating
+            a = choose_action_transformer(curr_buf, device)  # We use the deterministic policy during the evaluating
+            # a = choose_action_rnn(s, device)  # We use the deterministic policy during the evaluating
             s_, r, done, _ = self.env.step(a * self.args.max_action)
 
             if render and not done:
@@ -149,7 +149,7 @@ class Collector:
                 a, a_logprob = a.squeeze(0)[-1], a_logprob.squeeze(0)[-1]
                 # a: [action_dim], a_logprob: [action_dim]
 
-                return a, a_logprob
+                return a.detach().numpy(), a_logprob.detach().numpy()
 
         def choose_action_RNN(s, device):
             with torch.no_grad():
@@ -215,7 +215,7 @@ class Collector:
             # done = False
 
             state_buffer = []
-            reset_rnn_hidden()
+            # reset_rnn_hidden()
 
             if self.args.transformer_randomize_len:
                 max_seq_length = np.random.randint(1, self.args.transformer_max_len + 1)
@@ -236,8 +236,8 @@ class Collector:
                 # episode_steps += 1
                 # curr_buf.append(s)
                 # a, a_logprob = choose_action(s)  # Action and the corresponding log probability
-                # a, a_logprob = choose_action_transformer(state_buffer, self.device)
-                a, a_logprob = choose_action_RNN(s, self.device)
+                a, a_logprob = choose_action_transformer(state_buffer, self.device)
+                # a, a_logprob = choose_action_RNN(s, self.device)
                 s_, r, done, _ = self.env.step(a * self.args.max_action)
 
                 if render and not done:
@@ -549,14 +549,14 @@ if __name__ == '__main__':
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     # parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
-    parser.add_argument("--n_collectors", type=int, default=32, help="Number of collectors")
+    parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=8, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=1, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=1000,
+    parser.add_argument("--transformer_max_len", type=int, default=1600,
                         help="The maximum length of observation that transformed needed to attend backward")
     parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
@@ -564,7 +564,7 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--lamda", type=float, default=0.95, help="GAE parameter")
     parser.add_argument("--epsilon", type=float, default=0.2, help="PPO clip parameter")
-    parser.add_argument("--K_epochs", type=int, default=10, help="PPO parameter")
+    parser.add_argument("--K_epochs", type=int, default=8, help="PPO parameter")
     parser.add_argument("--use_adv_norm", type=bool, default=True, help="Trick 1:advantage normalization")
     parser.add_argument("--use_state_norm", type=bool, default=False, help="Trick 2:state normalization")
     parser.add_argument("--use_reward_norm", type=bool, default=False, help="Trick 3:reward normalization")
@@ -580,7 +580,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 0
+    env_index = 2
 
     # Create new run from scratch
     main(args, env_name=env_names[env_index], seed=0)

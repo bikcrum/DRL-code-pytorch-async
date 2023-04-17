@@ -3,7 +3,6 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.distributions import Beta, Normal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
@@ -26,6 +25,7 @@ def orthogonal_init(layer, gain=np.sqrt(2)):
             nn.init.orthogonal_(param, gain=gain)
 
     return layer
+
 
 class PositionalEncoding(nn.Module):
 
@@ -80,7 +80,7 @@ class Actor_Transformer(nn.Module):
         s = s.transpose(0, 1)
         # s: [seq_len, batch_size, state_dim]
 
-        s = self.actor_fc1(s)
+        s = torch.relu(self.actor_fc1(s))
         # s: [seq_len, batch_size, hidden_dim]
 
         s = self.pos_encoder(s)
@@ -96,11 +96,11 @@ class Actor_Transformer(nn.Module):
         # logits: [batch_size, seq_len, action_dim]
 
         # Tanh because log_std range is [-1, 1]
-        mean = F.tanh(self.mean_layer(logit))
+        mean = torch.tanh(self.mean_layer(logit))
         # mean: [batch_size, seq_len, action_dim]
 
         # Tanh because log_std range is [-1, 1]
-        log_std = F.tanh(self.log_std_layer(logit))
+        log_std = torch.tanh(self.log_std_layer(logit))
         # log_std: [batch_size, seq_len, action_dim]
 
         return mean, log_std
@@ -140,7 +140,7 @@ class Critic_Transformer(nn.Module):
         s = s.transpose(0, 1)
         # s: [seq_len, batch_size, state_dim]
 
-        s = self.critic_fc1(s)
+        s = torch.relu(self.critic_fc1(s))
         # s: [seq_len, batch_size, hidden_dim]
 
         s = self.pos_encoder(s)
@@ -205,11 +205,11 @@ class Actor_RNN(nn.Module):
         # logit = self.actor_fc2(output)
 
         # Tanh because log_std range is [-1, 1]
-        mean = F.tanh(self.mean_layer(output))
+        mean = torch.tanh(self.mean_layer(output))
         # mean: [batch_size, seq_len, action_dim]
 
         # Tanh because log_std range is [-1, 1]
-        log_std = F.tanh(self.log_std_layer(output))
+        log_std = torch.tanh(self.log_std_layer(output))
         # log_std: [batch_size, seq_len, action_dim]
 
         return mean, log_std
@@ -277,8 +277,8 @@ class PPO_continuous():
         self.use_lr_decay = args.use_lr_decay
         self.use_adv_norm = args.use_adv_norm
 
-        self.actor = Actor_RNN(args)
-        self.critic = Critic_RNN(args)
+        self.actor = Actor_Transformer(args)
+        self.critic = Critic_Transformer(args)
 
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a, eps=1e-5)
@@ -290,6 +290,7 @@ class PPO_continuous():
     def reset_rnn_hidden(self):
         self.critic.rnn_hidden = None
         self.actor.rnn_hidden = None
+
     # def evaluate(self, s, device):  # When evaluating the policy, we only use the mean
     #     s1, s2 = s
     #     s1 = torch.unsqueeze(torch.tensor(s1, dtype=torch.float, device=device), 0)
@@ -436,7 +437,7 @@ class PPO_continuous():
         for _ in range(self.K_epochs):
             # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
             for index in BatchSampler(SubsetRandomSampler(range(self.batch_size)), self.mini_batch_size, False):
-                self.reset_rnn_hidden()
+                # self.reset_rnn_hidden()
                 dist_now = self.actor.get_distribution(
                     batch['s'][index])  # logits_now.shape=(mini_batch_size, max_episode_len, action_dim)
                 values_now = self.critic(batch['s'][index]).squeeze(
