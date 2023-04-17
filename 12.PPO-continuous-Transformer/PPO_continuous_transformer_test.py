@@ -6,9 +6,13 @@ import select
 import sys
 import tty
 
+import cv2
 import gym
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import tqdm
+from torch import nn
 
 import wandb
 from normalization import Normalization
@@ -36,7 +40,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
     # parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=1,
+    parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of observation that transformed needed to attend backward")
     # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     # parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
@@ -87,7 +91,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
 
     wandb.login()
 
-    run = wandb.Api().run(os.path.join(f'toy-test-{env_name}', 'dpxzfbxo'))
+    run = wandb.Api().run(os.path.join(f'toy-test-{env_name}', run_name.replace(':', '_')))
 
     os.makedirs('saved_models', exist_ok=True)
     os.makedirs('checkpoints', exist_ok=True)
@@ -142,6 +146,43 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
 
             return mean.detach().numpy()
 
+        # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
+
+    def actor_forward(actor, s):
+        assert s.dim() == 3, "Actor_Transformer only accept 3d input. [batch_size, seq_len, state_dim]"
+
+        s = s.transpose(0, 1)
+        # s: [seq_len, batch_size, state_dim]
+
+        s = torch.relu(actor.actor_fc1(s))
+        # s: [seq_len, batch_size, hidden_dim]
+
+        s = actor.pos_encoder(s)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        mask = nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device)
+        s, attn_maps = actor.transformer_encoder(s, mask=mask, need_weights=True)
+        # s: [seq_len, batch_size, hidden_dim]
+
+        attn_maps = torch.stack(attn_maps)
+        # attn_maps: [num_layers, batch_size, seq_len, seq_len]
+
+        # logit = self.actor_fc2(s)
+        # logit: [seq_len, batch_size, action_dim]
+
+        logit = s.transpose(0, 1)
+        # logits: [batch_size, seq_len, action_dim]
+
+        # Tanh because log_std range is [-1, 1]
+        mean = torch.tanh(actor.mean_layer(logit))
+        # mean: [batch_size, seq_len, action_dim]
+
+        # Tanh because log_std range is [-1, 1]
+        log_std = torch.tanh(actor.log_std_layer(logit))
+        # log_std: [batch_size, seq_len, action_dim]
+
+        return mean, log_std, attn_maps
+
     def choose_action_transformer(s, device):
         with torch.no_grad():
             s = torch.tensor(s, dtype=torch.float, device=device)
@@ -152,14 +193,14 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
             s = s.unsqueeze(0)
             # s1: [1, seq_len, state_dim]
 
-            mean, _ = actor(s)
-            # mean: [1, seq_len, action_dim]
+            mean, _, attn_maps = actor_forward(actor, s)
+            # mean: [1, seq_len, action_dim], attn_maps: [num_layers, 1, seq_len, seq_len]
 
             # Get output from last observation
             mean = mean.squeeze(0)[-1]
             # mean: [action_dim]
 
-            return mean.detach().numpy()
+            return mean.detach().numpy(), attn_maps[0].squeeze(0).detach().numpy()
 
     for _ in tqdm.tqdm(range(n_epoch)):
         s = env.reset()
@@ -180,12 +221,15 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
                 state_buffer.popleft()
             state_buffer.append(s)
             # a = choose_action_rnn(s, dev_inf)
-            a = choose_action_transformer(state_buffer, dev_inf)
+            a, attn_map = choose_action_transformer(state_buffer, dev_inf)
             # logging.info(f'Action:{a}')
             s_, r, done, info = env.step(a * args.max_action)
 
             if render and not done:
                 env.render()
+
+            cv2.imshow('attn_map', cv2.resize(attn_map, (256, 256), interpolation=cv2.INTER_NEAREST))
+            cv2.waitKey(1)
 
             if args.use_state_norm:
                 s_ = state_norm(s_, update=False)
@@ -210,7 +254,7 @@ if __name__ == '__main__':
     env_index = 2
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-16 23:44:03.921178',
+                    run_name='2023-04-17 02:51:57.227012',
                     replace=True,
                     best=False)
     # random()
