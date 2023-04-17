@@ -549,10 +549,10 @@ if __name__ == '__main__':
     parser.add_argument("--evaluate_freq", type=float, default=5e3,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     # parser.add_argument("--save_freq", type=int, default=20, help="Save frequency")
-    parser.add_argument("--n_collectors", type=int, default=16, help="Number of collectors")
+    parser.add_argument("--n_collectors", type=int, default=32, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=8, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
@@ -580,7 +580,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 2
+    env_index = 0
 
     # Create new run from scratch
     main(args, env_name=env_names[env_index], seed=0)
