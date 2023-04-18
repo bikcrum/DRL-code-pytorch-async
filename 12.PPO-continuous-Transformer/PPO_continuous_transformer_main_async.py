@@ -338,8 +338,8 @@ def main(args, env_name, seed):
 
     # env = gym.make(env_name)
     # env_evaluate = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
-    env = gym.make(env_name)
-    env_evaluate = gym.make(env_name)
+    env = gym.make(env_name, hardcore=True)
+    env_evaluate = gym.make(env_name, hardcore=True)
     np.random.seed(seed)
     torch.manual_seed(seed)
     env.seed(seed)

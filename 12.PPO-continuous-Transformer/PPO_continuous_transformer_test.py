@@ -27,7 +27,7 @@ def has_data():
     return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
 
 
-def evaluate_policy(env_name, run_name, replace=True, best=True):
+def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
     parser = argparse.ArgumentParser("Hyperparameters Setting for PPO-continuous-transformer")
     # parser.add_argument("--max_train_steps", type=int, default=int(3e8), help=" Maximum number of training steps")
     # parser.add_argument("--evaluate_freq", type=float, default=5e3,
@@ -63,12 +63,10 @@ def evaluate_policy(env_name, run_name, replace=True, best=True):
 
     args = parser.parse_args()
 
-    env = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
+    env = gym.make(env_name, hardcore=True)  # When evaluating the policy, we need to rebuild an environment
     # Set random seed
-    # env.seed(seed)
-    # env.action_space.seed(seed)
-    # env_evaluate.seed(seed)
-    # env_evaluate.action_space.seed(seed)
+    env.seed(seed)
+    env.action_space.seed(seed)
     # seed = 10
 
     # np.random.seed(seed)
@@ -254,7 +252,7 @@ if __name__ == '__main__':
     env_index = 2
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-17 02:51:57.227012',
+                    run_name='2023-04-18 00:00:41.543640',
                     replace=True,
                     best=False)
     # random()

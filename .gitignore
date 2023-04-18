@@ -7,3 +7,4 @@ runs
 saved_models
 checkpoints
 wandb
+scratch.ipynb

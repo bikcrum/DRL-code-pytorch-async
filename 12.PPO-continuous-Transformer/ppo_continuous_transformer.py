@@ -86,7 +86,7 @@ class Actor_Transformer(nn.Module):
         s = self.pos_encoder(s)
         # s: [seq_len, batch_size, hidden_dim]
 
-        s = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
+        s, _ = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
         # s: [seq_len, batch_size, hidden_dim]
 
         # logit = self.actor_fc2(s)
@@ -146,7 +146,7 @@ class Critic_Transformer(nn.Module):
         s = self.pos_encoder(s)
         # s: [seq_len, batch_size, hidden_dim]
 
-        s = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
+        s, _ = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
         # s: [seq_len, batch_size, hidden_dim]
 
         logit = self.critic_fc2(s)

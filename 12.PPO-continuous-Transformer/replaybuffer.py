@@ -91,8 +91,8 @@ class ReplayBuffer:
         # active = torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32, device=device)
         # ep_lens = active.sum(-1).long()
 
-        active = torch.tensor(active[:, :max_episode_len], dtype=torch.bool, device=device)
-        s = torch.tensor(s[:, :max_episode_len + 1], dtype=torch.float32, device=device)
+        active = torch.tensor(active, dtype=torch.bool, device=device)
+        s = torch.tensor(s, dtype=torch.float32, device=device)
         # v = torch.tensor(self.buffer['v'][:, :self.max_episode_len], dtype=torch.float32, device=device)
         # v_next = torch.tensor(self.buffer['v'][:, 1:self.max_episode_len + 1], dtype=torch.float32, device=device)
 
@@ -109,10 +109,10 @@ class ReplayBuffer:
         v_next[~active] = 0
 
         s = s[:, :-1]
-        a = torch.tensor(a[:, :max_episode_len], dtype=torch.float32, device=device)
-        a_logprob = torch.tensor(a_logprob[:, :max_episode_len], dtype=torch.float32, device=device)
-        r = torch.tensor(r[:, :max_episode_len], dtype=torch.float32, device=device)
-        dw = torch.tensor(dw[:, :max_episode_len], dtype=torch.bool, device=device)
+        a = torch.tensor(a, dtype=torch.float32, device=device)
+        a_logprob = torch.tensor(a_logprob, dtype=torch.float32, device=device)
+        r = torch.tensor(r, dtype=torch.float32, device=device)
+        dw = torch.tensor(dw, dtype=torch.bool, device=device)
 
         # v_pred[~active] = 0
         # v_next_pred[~active] = 0
@@ -159,12 +159,12 @@ class ReplayBuffer:
 
             max_episode_len = max(max_episode_len, replay_buffer.max_episode_len)
 
-        s = np.concatenate(s, axis=0)
-        a = np.concatenate(a, axis=0)
-        a_logprob = np.concatenate(a_logprob, axis=0)
-        r = np.concatenate(r, axis=0)
-        dw = np.concatenate(dw, axis=0)
-        active = np.concatenate(active, axis=0)
+        s = np.concatenate(s, axis=0)[:, :max_episode_len + 1]
+        a = np.concatenate(a, axis=0)[:, :max_episode_len]
+        a_logprob = np.concatenate(a_logprob, axis=0)[:, :max_episode_len]
+        r = np.concatenate(r, axis=0)[:, :max_episode_len]
+        dw = np.concatenate(dw, axis=0)[:, :max_episode_len]
+        active = np.concatenate(active, axis=0)[:, :max_episode_len]
 
         batch = ReplayBuffer.get_training_data(s, a, a_logprob, r, dw, active, args, max_episode_len,
                                                value_function, device)
