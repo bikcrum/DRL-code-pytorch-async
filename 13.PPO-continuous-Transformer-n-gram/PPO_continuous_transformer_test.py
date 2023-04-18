@@ -8,17 +8,14 @@ import tty
 
 import cv2
 import gym
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 import tqdm
 from torch import nn
 
 import wandb
-from normalization import Normalization
-
-from ppo_continuous_transformer import PPO_continuous, Actor_Transformer
 from PPO_continuous_transformer_main_async import get_device
+from normalization import Normalization
+from ppo_continuous_transformer import Actor_Transformer
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,7 +37,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
     # parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=16,
+    parser.add_argument("--transformer_max_len", type=int, default=4,
                         help="The maximum length of observation that transformed needed to attend backward")
     # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     # parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
@@ -63,7 +60,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
 
     args = parser.parse_args()
 
-    env = gym.make(env_name, hardcore=True)  # When evaluating the policy, we need to rebuild an environment
+    env = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
     # Set random seed
     env.seed(seed)
     env.action_space.seed(seed)
@@ -252,7 +249,7 @@ if __name__ == '__main__':
     env_index = 2
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-18 00:00:41.543640',
+                    run_name='2023-04-18 16:43:33.402348',
                     replace=True,
                     best=False)
     # random()

@@ -1,8 +1,10 @@
+import logging
 import math
 
 import numpy as np
 import torch
 import torch.nn as nn
+import wandb
 from torch.distributions import Beta, Normal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
@@ -25,6 +27,62 @@ def orthogonal_init(layer, gain=np.sqrt(2)):
             nn.init.orthogonal_(param, gain=gain)
 
     return layer
+
+
+class Actor_FF(nn.Module):
+    def __init__(self, args):
+        super(Actor_FF, self).__init__()
+        self.max_action = args.max_action
+        self.fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        self.fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
+        self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        self.std_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        # self.log_std = nn.Parameter(
+        #     torch.zeros(1, args.action_dim))  # We use 'nn.Parameter' to train log_std automatically
+
+        # self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
+
+        if args.use_orthogonal_init:
+            print("------use_orthogonal_init------")
+            orthogonal_init(self.fc1)
+            orthogonal_init(self.fc2)
+            orthogonal_init(self.mean_layer, gain=0.01)
+            orthogonal_init(self.std_layer, gain=0.01)
+
+    def forward(self, s):
+        s = torch.relu(self.fc1(s))
+        s = torch.relu(self.fc2(s))
+        mean = torch.tanh(self.mean_layer(s))  # [-1,1]->[-max_action,max_action]
+        log_std = torch.tanh(self.std_layer(s))  # [-1,1]->[-max_action,max_action]
+        return mean, log_std
+
+    def get_distribution(self, s):
+        mean, log_std = self.forward(s)
+        # log_std = self.log_std.expand_as(mean)  # To make 'log_std' have the same dimension as 'mean'
+        std = torch.exp(log_std)  # The reason we train the 'log_std' is to ensure std=exp(log_std)>0
+        dist = Normal(mean, std)  # Get the Gaussian distribution
+        return dist
+
+
+class Critic_FF(nn.Module):
+    def __init__(self, args):
+        super(Critic_FF, self).__init__()
+        self.fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        self.fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
+        self.fc3 = nn.Linear(args.hidden_dim, 1)
+        # self.activate_func = [nn.ReLU(), nn.Tanh()][args.use_tanh]  # Trick10: use tanh
+
+        if args.use_orthogonal_init:
+            print("------use_orthogonal_init------")
+            orthogonal_init(self.fc1)
+            orthogonal_init(self.fc2)
+            orthogonal_init(self.fc3)
+
+    def forward(self, s):
+        s = torch.relu(self.fc1(s))
+        s = torch.relu(self.fc2(s))
+        v_s = self.fc3(s)
+        return v_s
 
 
 class PositionalEncoding(nn.Module):
@@ -280,6 +338,12 @@ class PPO_continuous():
         self.actor = Actor_Transformer(args)
         self.critic = Critic_Transformer(args)
 
+        # self.actor = Actor_FF(args)
+        # self.critic = Critic_FF(args)
+
+        self.actor.eval()
+        self.critic.eval()
+
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a, eps=1e-5)
             self.optimizer_critic = torch.optim.Adam(self.critic.parameters(), lr=self.lr_c, eps=1e-5)
@@ -351,7 +415,7 @@ class PPO_continuous():
 
     def get_value_transformer(self, s):
         with torch.no_grad():
-            s = torch.tensor(s, dtype=torch.float).unsqueeze(0)
+            s = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
             value = self.critic(s)[:, -1]
             return value.item()
 
@@ -432,11 +496,19 @@ class PPO_continuous():
         # ep_start_indices = torch.concat((torch.LongTensor([0]).to(device), ep_end_lens))
         # Optimize policy for K epochs:
 
-        batch = ReplayBuffer.create_batch(replay_buffers, self.args, self.critic, device)
+        batch = ReplayBuffer.create_batch(replay_buffers, self.args, self.actor, self.critic, device)
+
+        new_batch_size = batch['s'].size(0)
+
+        log = {'new_batch_size': new_batch_size}
+
+        logging.info(log)
+
+        wandb.log(log, step=total_steps)
 
         for _ in range(self.K_epochs):
             # Random sampling and no repetition. 'False' indicates that training will continue even if the number of samples in the last time is less than mini_batch_size
-            for index in BatchSampler(SubsetRandomSampler(range(self.batch_size)), self.mini_batch_size, False):
+            for index in BatchSampler(SubsetRandomSampler(range(new_batch_size)), self.mini_batch_size, False):
                 # self.reset_rnn_hidden()
                 dist_now = self.actor.get_distribution(
                     batch['s'][index])  # logits_now.shape=(mini_batch_size, max_episode_len, action_dim)

@@ -75,6 +75,11 @@ class Evaluator:
 
                 return mean.detach().numpy()
 
+        def choose_action_ff(s, device):  # When evaluating the policy, we only use the mean
+            s = torch.tensor(s, dtype=torch.float32, device=device)
+            mean, _ = actor(s)
+            return mean.detach().cpu().numpy().flatten()
+
         reward = 0
         length = 0
 
@@ -96,6 +101,7 @@ class Evaluator:
             curr_buf.append(s)
             a = choose_action_transformer(curr_buf, device)  # We use the deterministic policy during the evaluating
             # a = choose_action_rnn(s, device)  # We use the deterministic policy during the evaluating
+            # a = choose_action_ff(s, device)
             s_, r, done, _ = self.env.step(a * self.args.max_action)
 
             if render and not done:
@@ -125,13 +131,13 @@ class Collector:
         self.args = args
         self.device = device
 
-    def run(self, actor, render=False):
+    def run(self, actor, critic, render=False):
         def reset_rnn_hidden():
             actor.rnn_hidden = None
 
         def choose_action_transformer(s, device):
             with torch.no_grad():
-                s = torch.tensor(s, dtype=torch.float, device=device)
+                s = torch.tensor(s, dtype=torch.float32, device=device)
 
                 assert s.dim() == 2, "s1 must be 2D, [seq_len, state_dim]"
 
@@ -150,6 +156,12 @@ class Collector:
                 # a: [action_dim], a_logprob: [action_dim]
 
                 return a.detach().numpy(), a_logprob.detach().numpy()
+
+        def get_value_transformer(s, device):
+            with torch.no_grad():
+                s = torch.tensor(s, dtype=torch.float32, device=device).unsqueeze(0)
+                value = critic(s)[:, -1]
+                return value.item()
 
         def choose_action_RNN(s, device):
             with torch.no_grad():
@@ -173,6 +185,20 @@ class Collector:
 
                 return a.detach().numpy(), a_logprob.detach().numpy()
 
+        def choose_action_ff(s, device):
+            s = torch.tensor(s, dtype=torch.float32, device=device)
+            with torch.no_grad():
+                dist = actor.get_distribution(s)
+                a = dist.sample()
+                a_logprob = dist.log_prob(a)
+            return a.numpy().flatten(), a_logprob.numpy().flatten()
+
+        def get_value_ff(s, device):
+            s = torch.tensor(s, dtype=torch.float32, device=device)
+            with torch.no_grad():
+                value = critic(s)
+            return value.item()
+
         # def choose_action_transformer(buffer):
         #     s1, s2 = zip(*buffer)
         #     s1 = torch.tensor(s1, dtype=torch.float, device=self.device).unsqueeze(1)  # [S, B, A]
@@ -192,16 +218,15 @@ class Collector:
         total_reward = []
         total_steps = []
 
-        episode_reward = 0
-        episode_step = 0
+        # episode_reward = 0
+        # episode_step = 0
 
-        s = self.env.reset()
+        # s = self.env.reset()
 
-        if self.args.use_reward_scaling:
-            self.reward_scaling.reset()
+        # if self.args.use_reward_scaling:
+        #     self.reward_scaling.reset()
 
-        # while replay_buffer.count < self.batch_size:
-        for _ in range(self.args.batch_size):
+        while replay_buffer.count < self.args.batch_size:
             # s = self.env.reset()
             # curr_buf = []
             # if render:
@@ -214,17 +239,30 @@ class Collector:
             # episode_reward = 0
             # done = False
 
-            state_buffer = []
+            # state_buffer = []
             # reset_rnn_hidden()
 
-            if self.args.transformer_randomize_len:
-                max_seq_length = np.random.randint(1, self.args.transformer_max_len + 1)
-            else:
-                max_seq_length = self.args.transformer_max_len
+            # if self.args.transformer_randomize_len:
+            #     max_seq_length = np.random.randint(1, self.args.transformer_max_len + 1)
+            # else:
+            #     max_seq_length = self.args.transformer_max_len
 
-            for seq_step in range(max_seq_length):
+            episode_reward = 0
+
+            s = self.env.reset()
+
+            if self.args.use_reward_scaling:
+                self.reward_scaling.reset()
+
+            state_buffer = collections.deque(maxlen=self.args.transformer_max_len)
+
+            for seq_step in range(self.args.episode_limit):
+                # if done or episode_step == self.args.episode_limit:
                 if self.args.use_state_norm:
                     s = self.state_norm(s)
+
+                if len(state_buffer) == self.args.transformer_max_len:
+                    state_buffer.popleft()
 
                 state_buffer.append(s)
                 # while not done and replay_buffer.count < self.args.batch_size:
@@ -235,16 +273,17 @@ class Collector:
 
                 # episode_steps += 1
                 # curr_buf.append(s)
-                # a, a_logprob = choose_action(s)  # Action and the corresponding log probability
+                # a, a_logprob = choose_action_ff(s, self.device)  # Action and the corresponding log probability
                 a, a_logprob = choose_action_transformer(state_buffer, self.device)
+                # v = get_value_transformer(state_buffer, self.device)
                 # a, a_logprob = choose_action_RNN(s, self.device)
+                # v = get_value_ff(s, self.device)
                 s_, r, done, _ = self.env.step(a * self.args.max_action)
 
                 if render and not done:
                     self.env.render()
 
                 episode_reward += r
-                episode_step += 1
                 #
                 # if self.args.use_state_norm:
                 #     s_ = self.state_norm(s_)
@@ -256,37 +295,39 @@ class Collector:
                 # When dead or win or reaching the max_episode_steps, done will be Ture, we need to distinguish them;
                 # dw means dead or win,there is no next state s';
                 # but when reaching the max_episode_steps,there is a next state s' actually.
-                if done and episode_step != self.args.episode_limit:
+                if done and seq_step != self.args.episode_limit - 1:
                     dw = True
                 else:
                     dw = False
+
                 if self.args.use_reward_scaling:
                     r = self.reward_scaling(r)
 
-                replay_buffer.store_transition(seq_step, s, a, a_logprob, r, dw)
+                replay_buffer.store_transition(s, a, a_logprob, r, dw)
                 s = s_
 
-                if done or episode_step == self.args.episode_limit:
+                if done or replay_buffer.count == self.args.batch_size:
                     break
 
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
-            replay_buffer.store_last_state(seq_step + 1, s)
+            if len(state_buffer) == self.args.transformer_max_len:
+                state_buffer.popleft()
 
-            if done or episode_step == self.args.episode_limit:
+            state_buffer.append(s)
+
+            # v = get_value_transformer(state_buffer, self.device)
+            # v = get_value_ff(s, self.device)
+
+            replay_buffer.store_last_state(s)
+
+            # Don't report partial episodes
+            if done:
                 total_reward.append(episode_reward)
-                total_steps.append(episode_step)
+                total_steps.append(seq_step + 1)
 
-                episode_reward = 0
-                episode_step = 0
-
-                s = self.env.reset()
-
-                if self.args.use_reward_scaling:
-                    self.reward_scaling.reset()
-
-        return replay_buffer, np.mean(total_reward), np.mean(total_steps), np.sum(total_steps)
+        return replay_buffer, np.mean(total_reward), np.mean(total_steps), replay_buffer.count
 
 
 def get_device():
@@ -338,8 +379,8 @@ def main(args, env_name, seed):
 
     # env = gym.make(env_name)
     # env_evaluate = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
-    env = gym.make(env_name, hardcore=True)
-    env_evaluate = gym.make(env_name, hardcore=True)
+    env = gym.make(env_name)
+    env_evaluate = gym.make(env_name)
     np.random.seed(seed)
     torch.manual_seed(seed)
     env.seed(seed)
@@ -386,7 +427,7 @@ def main(args, env_name, seed):
         project=f'toy-test-{env_name}',
         name=run_name,
         config=args.__dict__,
-        # mode='disabled'
+        # mode='disabled',
         id=run_name.replace(':', '_'),
     )
 
@@ -432,11 +473,12 @@ def main(args, env_name, seed):
 
     while total_steps < args.max_train_steps:
         actor = agent.actor.to(dev_inf)
+        critic = agent.critic.to(dev_inf)
 
         logging.info("Collecting data")
         time_collecting = datetime.datetime.now()
         replay_buffers, mean_ep_rewards, mean_ep_lens, collector_total_steps = zip(*ray.get(
-            [collector.run.remote(actor, render=False) for collector in collectors]))
+            [collector.run.remote(actor, critic, render=False) for collector in collectors]))
 
         time_collecting = datetime.datetime.now() - time_collecting
 
@@ -504,7 +546,7 @@ def main(args, env_name, seed):
 
             logging.info("Evaluating")
             time_evaluating = datetime.datetime.now()
-            data = ray.get([evaluator.run.remote(actor, dev_inf) for evaluator in evaluators])
+            data = ray.get([evaluator.run.remote(actor, dev_inf, render=False) for evaluator in evaluators])
             time_evaluating = datetime.datetime.now() - time_evaluating
 
             reward, length = list(zip(*data))
@@ -553,11 +595,11 @@ if __name__ == '__main__':
     parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=16, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=8192, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=256, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=16,
+    parser.add_argument("--transformer_max_len", type=int, default=4,
                         help="The maximum length of observation that transformed needed to attend backward")
     parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")

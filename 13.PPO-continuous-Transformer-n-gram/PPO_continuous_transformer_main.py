@@ -1,15 +1,15 @@
+import argparse
 import datetime
 import logging
 
-import torch
-import numpy as np
-import wandb
-# from torch.utils.tensorboard import SummaryWriter
 import gym
-import argparse
+import numpy as np
+import torch
+
+import wandb
 from normalization import Normalization, RewardScaling
-from replaybuffer import ReplayBuffer
 from ppo_continuous_transformer import PPO_continuous
+from replaybuffer import ReplayBuffer
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -100,7 +100,7 @@ class Runner:
             wandb.log(log, step=self.total_steps)
 
             actor_loss, critic_loss, entropy, entropy_bonus = self.agent.update([self.replay_buffer], self.total_steps,
-                                                       device_optim)  # Training
+                                                                                device_optim)  # Training
 
             self.agent.actor = self.agent.actor.to(device_collector)
             self.agent.critic = self.agent.critic.to(device_collector)
