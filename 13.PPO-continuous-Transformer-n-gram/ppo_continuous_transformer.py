@@ -112,21 +112,25 @@ class Actor_Transformer(nn.Module):
         super(Actor_Transformer, self).__init__()
 
         self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
+        # self.actor_fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0, max_len=args.transformer_max_len)
-        encoder_layers = nn.TransformerEncoderLayer(d_model=64, nhead=1, dim_feedforward=64, dropout=0)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=1,
+                                                    dim_feedforward=args.hidden_dim, dropout=0)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
 
         # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
         self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
-        self.log_std_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        # self.log_std_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        self.log_std = nn.Parameter(torch.zeros(1, args.action_dim))
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
             orthogonal_init(self.actor_fc1)
+            # orthogonal_init(self.actor_fc2)
             # orthogonal_init(self.pos_encoder)
             orthogonal_init(self.mean_layer, gain=0.01)
-            orthogonal_init(self.log_std_layer, gain=0.01)
+            # orthogonal_init(self.log_std_layer, gain=0.01)
             # orthogonal_init(self.critic_fc1)
             # orthogonal_init(self.critic_rnn)
             # orthogonal_init(self.critic_fc2)
@@ -139,6 +143,9 @@ class Actor_Transformer(nn.Module):
         # s: [seq_len, batch_size, state_dim]
 
         s = torch.relu(self.actor_fc1(s))
+        # s: [seq_len, batch_size, hidden_dim]
+
+        # s = torch.relu(self.actor_fc2(s))
         # s: [seq_len, batch_size, hidden_dim]
 
         s = self.pos_encoder(s)
@@ -158,14 +165,16 @@ class Actor_Transformer(nn.Module):
         # mean: [batch_size, seq_len, action_dim]
 
         # Tanh because log_std range is [-1, 1]
-        log_std = torch.tanh(self.log_std_layer(logit))
+        # log_std = torch.tanh(self.log_std_layer(logit))
+        # log_std = torch.expand(self.log_std_layer(logit))
         # log_std: [batch_size, seq_len, action_dim]
+
+        log_std = self.log_std.expand_as(mean)  # To make 'log_std' have the same dimension as 'mean'
 
         return mean, log_std
 
     def get_distribution(self, s):
         mean, log_std = self.forward(s)
-        # Exp to make std positive
         std = log_std.exp()
         return Normal(mean, std)
 
@@ -177,7 +186,8 @@ class Critic_Transformer(nn.Module):
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0, max_len=args.transformer_max_len)
-        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=1, dim_feedforward=64, dropout=0)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=1,
+                                                    dim_feedforward=args.hidden_dim, dropout=0)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
 
         self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
@@ -189,7 +199,7 @@ class Critic_Transformer(nn.Module):
             # orthogonal_init(self.actor_fc2, gain=0.01)
             orthogonal_init(self.critic_fc1)
             # orthogonal_init(self.critic_rnn)
-            orthogonal_init(self.critic_fc2)
+            # orthogonal_init(self.critic_fc2)
 
     # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
     def forward(self, s):
@@ -199,6 +209,9 @@ class Critic_Transformer(nn.Module):
         # s: [seq_len, batch_size, state_dim]
 
         s = torch.relu(self.critic_fc1(s))
+        # s: [seq_len, batch_size, hidden_dim]
+
+        # s = torch.relu(self.critic_fc2(s))
         # s: [seq_len, batch_size, hidden_dim]
 
         s = self.pos_encoder(s)
@@ -341,8 +354,8 @@ class PPO_continuous():
         # self.actor = Actor_FF(args)
         # self.critic = Critic_FF(args)
 
-        self.actor.eval()
-        self.critic.eval()
+        # self.actor.eval()
+        # self.critic.eval()
 
         if self.set_adam_eps:  # Trick 9: set Adam epsilon=1e-5
             self.optimizer_actor = torch.optim.Adam(self.actor.parameters(), lr=self.lr_a, eps=1e-5)

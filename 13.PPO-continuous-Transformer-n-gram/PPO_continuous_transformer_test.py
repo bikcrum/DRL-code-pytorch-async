@@ -37,9 +37,10 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
     # parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=4,
+    parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of observation that transformed needed to attend backward")
-    # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
+    # parser.add_argument('--transformer_randomize_len', type=bool, de
+    # fault=False, help='randomize length of sequence')
     # parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
     # parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
     # parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
@@ -143,7 +144,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
 
         # s: [batch_size, seq_len, state_dim], ep_lens: [batch_size]
 
-    def actor_forward(actor, s):
+    def actor_forward(s):
         assert s.dim() == 3, "Actor_Transformer only accept 3d input. [batch_size, seq_len, state_dim]"
 
         s = s.transpose(0, 1)
@@ -173,7 +174,8 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
         # mean: [batch_size, seq_len, action_dim]
 
         # Tanh because log_std range is [-1, 1]
-        log_std = torch.tanh(actor.log_std_layer(logit))
+        # log_std = torch.tanh(actor.log_std_layer(logit))
+        log_std = actor.log_std.expand_as(mean)  # To make 'log_std' have the same dimension as 'mean'
         # log_std: [batch_size, seq_len, action_dim]
 
         return mean, log_std, attn_maps
@@ -188,7 +190,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
             s = s.unsqueeze(0)
             # s1: [1, seq_len, state_dim]
 
-            mean, _, attn_maps = actor_forward(actor, s)
+            mean, _, attn_maps = actor_forward(s)
             # mean: [1, seq_len, action_dim], attn_maps: [num_layers, 1, seq_len, seq_len]
 
             # Get output from last observation
@@ -196,6 +198,25 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
             # mean: [action_dim]
 
             return mean.detach().numpy(), attn_maps[0].squeeze(0).detach().numpy()
+
+    def choose_action_transformer_sample(s, device):
+        with torch.no_grad():
+            s = torch.tensor(s, dtype=torch.float32, device=device)
+
+            assert s.dim() == 2, "s1 must be 2D, [seq_len, state_dim]"
+
+            # Add batch dimension
+            s = s.unsqueeze(0)
+            # s1: [1, seq_len, state_dim]
+
+            dist = actor.get_distribution(s)
+            a = dist.sample()
+            # a: [1, seq_len, action_dim]
+
+            a = a.squeeze(0)[-1]
+            # a: [action_dim], a_logprob: [action_dim]
+
+            return a.detach().numpy()
 
     for _ in tqdm.tqdm(range(n_epoch)):
         s = env.reset()
@@ -217,6 +238,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
             state_buffer.append(s)
             # a = choose_action_rnn(s, dev_inf)
             a, attn_map = choose_action_transformer(state_buffer, dev_inf)
+            # a = choose_action_transformer_sample(state_buffer, dev_inf)
             # logging.info(f'Action:{a}')
             s_, r, done, info = env.step(a * args.max_action)
 
@@ -245,11 +267,11 @@ if __name__ == '__main__':
     # evaluate_policy(run_name='2023-03-19 23:32:54.522117')
     # evaluate_policy(run_name='2023-03-20 13:17:36.096833')
 
-    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 2
+    env_names = ['HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 0
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-18 16:43:33.402348',
+                    run_name='2023-04-18 23:56:38.190448',
                     replace=True,
                     best=False)
     # random()

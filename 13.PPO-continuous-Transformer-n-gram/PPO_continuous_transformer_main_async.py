@@ -27,10 +27,10 @@ ray.init(num_cpus=20, num_gpus=1, local_mode=False)
 # @ray.remote(num_gpus=0.1)
 @ray.remote
 class Evaluator:
-    def __init__(self, env, state_norm, args):
+    def __init__(self, env_name, state_norm, args):
         self.args = args
         self.state_norm = state_norm
-        self.env = env()
+        self.env = gym.make(env_name)
 
     def run(self, actor, device, render=False):
         actor = actor.to(device)
@@ -122,8 +122,8 @@ class Evaluator:
 # @ray.remote(num_gpus=0.1)
 @ray.remote
 class Collector:
-    def __init__(self, env, state_norm, reward_scaling, reward_norm, batch_size, args, device):
-        self.env = env()
+    def __init__(self, env_name, state_norm, reward_scaling, reward_norm, batch_size, args, device):
+        self.env = gym.make(env_name)
         self.state_norm = state_norm
         self.reward_scaling = reward_scaling
         self.reward_norm = reward_norm
@@ -312,11 +312,11 @@ class Collector:
             if self.args.use_state_norm:
                 s = self.state_norm(s)
 
-            if len(state_buffer) == self.args.transformer_max_len:
-                state_buffer.popleft()
-
-            state_buffer.append(s)
-
+            # if len(state_buffer) == self.args.transformer_max_len:
+            #     state_buffer.popleft()
+            #
+            # state_buffer.append(s)
+            #
             # v = get_value_transformer(state_buffer, self.device)
             # v = get_value_ff(s, self.device)
 
@@ -381,10 +381,10 @@ def main(args, env_name, seed):
     # env_evaluate = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
     env = gym.make(env_name)
     env_evaluate = gym.make(env_name)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    env.seed(seed)
-    env.action_space.seed(seed)
+    # np.random.seed(seed)
+    # torch.manual_seed(seed)
+    # env.seed(seed)
+    # env.action_space.seed(seed)
 
     # env = CassieNavigationEnv()
     # env_evaluate = CassieNavigationEnv()  # When evaluating the policy, we need to rebuild an environment
@@ -448,28 +448,21 @@ def main(args, env_name, seed):
     _args = deepcopy(args)
     _args.batch_size //= n_collectors
 
-    if _args.transformer_randomize_len:
-        if _args.batch_size * args.transformer_max_len / 2.0 < args.episode_limit:
-            logging.warning(
-                f'Each collector can only collect average of {_args.batch_size * args.transformer_max_len / 2.0} '
-                f'timesteps but env has maximum of {args.episode_limit} steps')
-    else:
-        if _args.batch_size * args.transformer_max_len < args.episode_limit:
-            logging.warning(
-                f'Each collector can only collect maximum of {_args.batch_size * args.transformer_max_len} '
-                f'timesteps but env has maximum of {args.episode_limit} steps')
+    if _args.batch_size < args.episode_limit:
+        logging.warning(
+            f'Each collector can only collect maximum of {_args.batch_size} timesteps but env has maximum of {args.episode_limit} steps')
 
     os.makedirs('checkpoints', exist_ok=True)
     os.makedirs('saved_models', exist_ok=True)
 
     prev_total_steps = 0
 
-    collectors = [Collector.remote(lambda: env, state_norm, reward_scaling, reward_norm,
+    collectors = [Collector.remote(env_name, state_norm, reward_scaling, reward_norm,
                                    _args.batch_size,
                                    _args,
                                    dev_inf) for _ in range(n_collectors)]
 
-    evaluators = [Evaluator.remote(lambda: env_evaluate, state_norm, args) for _ in range(args.n_evaluators)]
+    evaluators = [Evaluator.remote(env_name, state_norm, args) for _ in range(args.n_evaluators)]
 
     while total_steps < args.max_train_steps:
         actor = agent.actor.to(dev_inf)
@@ -595,13 +588,13 @@ if __name__ == '__main__':
     parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=8192, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=256, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=4096, help="Batc.h size")
+    parser.add_argument("--mini_batch_size", type=int, default=128, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=4,
+    parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of observation that transformed needed to attend backward")
-    parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
+    # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
@@ -622,8 +615,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 2
+    env_names = ['HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 0
 
     # Create new run from scratch
     main(args, env_name=env_names[env_index], seed=0)
