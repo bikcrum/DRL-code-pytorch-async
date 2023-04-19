@@ -588,13 +588,15 @@ if __name__ == '__main__':
     parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=4096, help="Batc.h size")
-    parser.add_argument("--mini_batch_size", type=int, default=128, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=8192, help="Batc.h size")
+    parser.add_argument("--mini_batch_size", type=int, default=256, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of observation that transformed needed to attend backward")
     # parser.add_argument('--transformer_randomize_len', type=bool, default=False, help='randomize length of sequence')
+    parser.add_argument('--transformer_num_layers', type=int, default=1, help='Number of layers in transformer encoder')
+    parser.add_argument('--nhead', type=int, default=1, help='Number of attention heads in transformer encoder')
     parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
     parser.add_argument("--lr_c", type=float, default=3e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")

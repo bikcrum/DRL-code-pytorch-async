@@ -39,6 +39,8 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
                         help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of observation that transformed needed to attend backward")
+    parser.add_argument('--transformer_num_layers', type=int, default=1, help='Number of layers in transformer encoder')
+    parser.add_argument('--nhead', type=int, default=1, help='Number of attention heads in transformer encoder')
     # parser.add_argument('--transformer_randomize_len', type=bool, de
     # fault=False, help='randomize length of sequence')
     # parser.add_argument("--lr_a", type=float, default=3e-4, help="Learning rate of actor")
@@ -271,7 +273,7 @@ if __name__ == '__main__':
     env_index = 0
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-18 23:56:38.190448',
+                    run_name='2023-04-19 00:58:25.658688',
                     replace=True,
                     best=False)
     # random()

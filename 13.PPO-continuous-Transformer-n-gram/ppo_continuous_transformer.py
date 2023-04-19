@@ -115,9 +115,9 @@ class Actor_Transformer(nn.Module):
         # self.actor_fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0, max_len=args.transformer_max_len)
-        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=1,
+        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=args.nhead,
                                                     dim_feedforward=args.hidden_dim, dropout=0)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=args.transformer_num_layers)
 
         # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
         self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
@@ -186,9 +186,9 @@ class Critic_Transformer(nn.Module):
         self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=0, max_len=args.transformer_max_len)
-        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=1,
+        encoder_layers = nn.TransformerEncoderLayer(d_model=args.hidden_dim, nhead=args.nhead,
                                                     dim_feedforward=args.hidden_dim, dropout=0)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=args.transformer_num_layers)
 
         self.critic_fc2 = nn.Linear(args.hidden_dim, 1)
 
