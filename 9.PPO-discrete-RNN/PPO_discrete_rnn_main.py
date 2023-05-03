@@ -59,10 +59,11 @@ class Runner:
             entity='team-osu',
             project=f'toy-test-{self.env_name}',
             name=str(time_now),
+            mode='disabled',
             config=args.__dict__
         )
 
-        device_collector, device_optim = torch.device('cpu'), torch.device('cuda')
+        device_collector, device_optim = torch.device('cpu'), torch.device('cpu')
         evaluate_num = -1  # Record the number of evaluations
         prev_total_steps = 0
 

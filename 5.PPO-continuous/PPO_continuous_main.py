@@ -195,5 +195,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_name = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3', 'HalfCheetah-v2', 'Hopper-v2', 'Walker2d-v2']
-    env_index = 2
+    env_index = 3
     main(args, env_name=env_name[env_index], number=1, seed=10)
