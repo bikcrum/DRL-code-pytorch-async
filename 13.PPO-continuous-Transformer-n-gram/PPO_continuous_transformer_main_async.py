@@ -339,7 +339,7 @@ def get_device():
             if torch.backends.mps.is_available():
                 # May not require in future pytorch after fix
                 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = "1"
-                return torch.device("cpu"), torch.device("mps")
+                return torch.device("cpu"), torch.device("cpu")
             else:
                 return torch.device("cpu"), torch.device("cpu")
         except Exception as e:
@@ -424,7 +424,7 @@ def main(args, env_name, seed):
     # Create new run
     run = wandb.init(
         entity='team-osu',
-        project=f'toy-test-{env_name}',
+        project=env_name,
         name=run_name,
         config=args.__dict__,
         # mode='disabled',
@@ -618,7 +618,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     env_names = ['HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 0
+    env_index = 3
 
     # Create new run from scratch
     main(args, env_name=env_names[env_index], seed=0)

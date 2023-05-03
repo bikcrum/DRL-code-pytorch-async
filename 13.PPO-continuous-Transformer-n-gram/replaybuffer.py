@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import copy
 from torch.nn import functional as F
+from torch.nn.utils.rnn import pad_sequence
 
 
 class ReplayBuffer:
@@ -70,28 +71,22 @@ class ReplayBuffer:
         #     self.max_episode_len = episode_step
 
     @staticmethod
-    def get_adv(v, v_next, r, dw, args):
+    def get_adv(v, v_next, r, dw, dw_0pad, active, args):
         # Calculate the advantage using GAE
-        # v = self.buffer['v'][:, :self.max_episode_len]
-        # v_next = self.buffer['v'][:, 1:self.max_episode_len + 1]
-        # r = self.buffer['r'][:, :self.max_episode_len]
-        # dw = self.buffer['dw'][:, :self.max_episode_len]
-        # active = self.buffer['active'][:, :self.max_episode_len]
         adv = torch.zeros_like(r, device=r.device)
         gae = 0
-        with torch.no_grad():  # adv and v_target have no gradient
-            # deltas.shape=(batch_size,max_episode_len)
+        with torch.no_grad():
             deltas = r + args.gamma * v_next * ~dw - v
-            for t in reversed(range(r.size(0))):
-                gae = deltas[t] + args.gamma * args.lamda * gae  # gae.shape=(batch_size)
-                adv[t] = gae
-            v_target = adv + v  # v_target.shape(batch_size,max_episode_len)
-            if args.use_adv_norm:  # Trick 1:advantage normalization
-                # adv_copy = copy.deepcopy(adv)
-                # adv_copy[active == 0] = np.nan  # 忽略掉active=0的那些adv
-                # adv = ((adv - np.nanmean(adv_copy)) / (np.nanstd(adv_copy) + 1e-5))
-                mean = torch.nanmean(adv)
-                std = torch.tensor(np.nanstd(adv.cpu().numpy()), device=adv.device) + 1e-5
+            deltas_0pad = r + args.gamma * v_next * ~dw_0pad - v
+
+            assert (deltas == deltas_0pad).all()
+            for t in reversed(range(r.size(1))):
+                gae = deltas[:, t] + args.gamma * args.lamda * gae
+                adv[:, t] = gae
+            v_target = adv + v
+            if args.use_adv_norm:
+                mean = adv[active].mean()
+                std = adv[active].std() + 1e-8
                 adv = (adv - mean) / std
         return adv, v_target
 
@@ -104,116 +99,139 @@ class ReplayBuffer:
         return F.pad(x, [0] * (x.dim() - 2) * 2 + [0, length], value=0)
 
     @staticmethod
-    def get_training_data(s, s_last, a, a_logprob, r, dw, ep_lens, args, action_function, value_function, device):
-        # active = torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32, device=device)
-        # ep_lens = active.sum(-1).long()
+    def get_training_data(s, s_last, a, a_logprob, r, dw, ep_lens, args, value_function,
+                          device):
+        with torch.no_grad():
+            # Split tensor into episodes
+            s = torch.tensor(s, dtype=torch.float32, device=device)
+            s_batch = s.split(ep_lens)
 
-        # active = torch.tensor(active, dtype=torch.bool, device=device)
-        s = torch.tensor(s, dtype=torch.float32, device=device)
-        s_batch = s.split(ep_lens)
+            s_last = torch.tensor(s_last, dtype=torch.float32, device=device)
 
-        # v = torch.tensor(v, dtype=torch.float32, device=device)
-        # v_batch = v.split(ep_lens)
+            a = torch.tensor(a, dtype=torch.float32, device=device)
+            a_batch = a.split(ep_lens)
 
-        s_last = torch.tensor(s_last, dtype=torch.float32, device=device)
-        # v_last = torch.tensor(v_last, dtype=torch.float32, device=device)
+            a_logprob = torch.tensor(a_logprob, dtype=torch.float32, device=device)
+            a_logprob_batch = a_logprob.split(ep_lens)
 
-        a = torch.tensor(a, dtype=torch.float32, device=device)
-        a_batch = a.split(ep_lens)
+            r = torch.tensor(r, dtype=torch.float32, device=device)
+            r_batch = r.split(ep_lens)
 
-        a_logprob = torch.tensor(a_logprob, dtype=torch.float32, device=device)
-        a_logprob_batch = a_logprob.split(ep_lens)
+            dw = torch.tensor(dw, dtype=torch.bool, device=device)
+            dw_batch = dw.split(ep_lens)
 
-        r = torch.tensor(r, dtype=torch.float32, device=device)
-        r_batch = r.split(ep_lens)
+            v_batch = []
+            v_next_batch = []
 
-        dw = torch.tensor(dw, dtype=torch.bool, device=device)
-        dw_batch = dw.split(ep_lens)
+            s_batch_unfolded = []
+            a_batch_unfolded = []
+            a_logprob_batch_unfolded = []
+            active_batch_unfolded = []
+            adv_batch_unfolded = []
+            v_target_batch_unfolded = []
 
-        s_batch_unfolded = []
-        # v_batch_unfolded = []
-        # v_next_batch_unfolded = []
-        a_batch_unfolded = []
-        a_logprob_batch_unfolded = []
-        # r_batch_unfolded = []
-        # dw_batch_unfolded = []
-        active_batch_unfolded = []
-        adv_batch_unfolded = []
-        v_target_batch_unfolded = []
+            stride = 1
+            max_seq_len = min(max(ep_lens), args.transformer_max_len)
+            for i in range(len(ep_lens)):
+                ep_len = ep_lens[i]
 
-        stride = 1
-        for i in range(len(s_batch)):
-            seq_len = min(args.transformer_max_len, s_batch[i].size(0))
+                # Add last state to the end of the episode
+                _s = torch.vstack((s_batch[i], s_last[i].unsqueeze(0)))
+                # _s: [ep_len + 1, *state_shape]
 
-            _s = ReplayBuffer.unfold(torch.vstack((s_batch[i], s_last[i])), size=seq_len, step=stride)
-            _v = value_function(_s).squeeze(-1)
-            _v = torch.cat((_v[0], _v[1:, -1]))
-            _v_next = _v[1:]
-            _v = _v[:-1]
-            _s = _s[:-1]
-            _a = a_batch[i]
-            _a_logprob = a_logprob_batch[i]
-            _r = r_batch[i]
-            _dw = dw_batch[i]
+                # If the episode is longer than transformer_max_len then the sequence is generated with stride
+                if args.transformer_max_len < ep_len + 1:
+                    seq_len = args.transformer_max_len
+                    # assert ep_len - seq_len + 2 >= 2
+                    _s = ReplayBuffer.unfold(_s, size=seq_len, step=stride)
+                    # _s: [ep_len - seq_len + 2, seq_len, *state_shape]
+                    _v = value_function(_s).squeeze(-1)
+                    # _v: [ep_len - seq_len + 2, seq_len]
+                    _v = torch.cat((_v[0], _v[1:, -1]))
+                    # _v: [ep_len + 1]
+                    _v_next = _v[1:]
+                    # _v_next: [ep_len]
+                    _v = _v[:-1]
+                    # _v: [ep_len]
+                    _s = _s[:-1]
+                    # _s: [ep_len - seq_len + 1, seq_len, *state_shape]
+                else:
+                    # If the episode is shorter or equal to transformer_max_len then there is no stride
+                    # so only one sequence is generated
+                    _s = _s.unsqueeze(0)
+                    # _s: [1, ep_len + 1, *state_shape]
+                    _v = value_function(_s).squeeze(-1)
+                    # _v: [1, ep_len + 1]
+                    _v_next = _v[:, 1:].squeeze(0)
+                    # _v_next: [ep_len]
+                    _v = _v[:, :-1].squeeze(0)
+                    # _v: [ep_len]
+                    _s = _s[:, :-1]
+                    # _s: [1, ep_len, *state_shape]
 
-            _adv, _v_target = ReplayBuffer.get_adv(_v, _v_next, _r, _dw, args)
+                # Pad sequences to the same length
+                if _s.size(1) < max_seq_len:
+                    _s = ReplayBuffer.pad_sequence(_s, max_seq_len - _s.size(1))
+                    # _s: [batch, max_seq_len, *state_shape]
 
-            _a = ReplayBuffer.unfold(_a, size=seq_len, step=stride)
-            _a_logprob = ReplayBuffer.unfold(_a_logprob, size=seq_len, step=stride)
-            # _r = ReplayBuffer.unfold(_r, size=seq_len, step=stride)
-            # _dw = ReplayBuffer.unfold(_dw, size=seq_len, step=stride)
-            _adv = ReplayBuffer.unfold(_adv, size=seq_len, step=stride)
-            _v_target = ReplayBuffer.unfold(_v_target, size=seq_len, step=stride)
-            _active = torch.ones((_s.size(0), _s.size(1)), dtype=torch.bool, device=device)
+                s_batch_unfolded.append(_s)
 
-            if seq_len < args.transformer_max_len:
-                _s = ReplayBuffer.pad_sequence(_s, args.transformer_max_len - seq_len)
-                # _v = ReplayBuffer.pad_sequence(_v, args.transformer_max_len - seq_len)
-                # _v_next = ReplayBuffer.pad_sequence(_v_next, args.transformer_max_len - seq_len)
-                _a = ReplayBuffer.pad_sequence(_a, args.transformer_max_len - seq_len)
-                _a_logprob = ReplayBuffer.pad_sequence(_a_logprob, args.transformer_max_len - seq_len)
-                # _r = ReplayBuffer.pad_sequence(_r, args.transformer_max_len - seq_len)
-                # _dw = ReplayBuffer.pad_sequence(_dw, args.transformer_max_len - seq_len)
-                _adv = ReplayBuffer.pad_sequence(_adv, args.transformer_max_len - seq_len)
-                _v_target = ReplayBuffer.pad_sequence(_v_target, args.transformer_max_len - seq_len)
-                _active = ReplayBuffer.pad_sequence(_active, args.transformer_max_len - seq_len)
+                v_batch.append(_v)
+                v_next_batch.append(_v_next)
 
-            s_batch_unfolded.append(_s)
-            # v_batch_unfolded.append(_v)
-            # v_next_batch_unfolded.append(_v_next)
-            a_batch_unfolded.append(_a)
-            a_logprob_batch_unfolded.append(_a_logprob)
-            # r_batch_unfolded.append(_r)
-            # dw_batch_unfolded.append(_dw)
-            adv_batch_unfolded.append(_adv)
-            v_target_batch_unfolded.append(_v_target)
-            active_batch_unfolded.append(_active)
+            # Pad to maximum episode length (This is not same as max_seq_len)
+            v = pad_sequence(v_batch, padding_value=0, batch_first=True)
+            v_next = pad_sequence(v_next_batch, padding_value=0, batch_first=True)
+            r = pad_sequence(r_batch, padding_value=0, batch_first=True)
+            active = torch.ones_like(dw).split(ep_lens)
+            dw = pad_sequence(dw_batch, padding_value=1, batch_first=True)
+            dw_0pad = pad_sequence(dw_batch, padding_value=0, batch_first=True)
+            active = pad_sequence(active, padding_value=0, batch_first=True)
 
-        s = torch.concatenate(s_batch_unfolded)
-        # v = torch.vstack(v_batch_unfolded)
-        # v_next = torch.vstack(v_next_batch_unfolded)
-        a = torch.concatenate(a_batch_unfolded)
-        a_logprob = torch.concatenate(a_logprob_batch_unfolded)
-        # r = torch.vstack(r_batch_unfolded)
-        # dw = torch.vstack(dw_batch_unfolded)
-        adv = torch.concatenate(adv_batch_unfolded)
-        v_target = torch.concatenate(v_target_batch_unfolded)
-        active = torch.concatenate(active_batch_unfolded)
+            # Compute advantages
+            adv, v_target = ReplayBuffer.get_adv(v, v_next, r, dw, dw_0pad, active, args)
 
-        # adv, v_target = ReplayBuffer.get_adv(v, v_next, r, dw, active, args, v.size(1))
+            # Get non-padded sequences
+            adv = adv[active].split(ep_lens)
+            v_target = v_target[active].split(ep_lens)
+            active = active[active].split(ep_lens)
 
-        batch = dict(s=s, a=a, a_logprob=a_logprob, active=active, adv=adv, v_target=v_target)
-        # batch = {'s': torch.tensor(self.buffer['s'][:, :self.max_episode_len], dtype=torch.float32, device=device),
-        #          'a': torch.tensor(self.buffer['a'][:, :self.max_episode_len], dtype=torch.long, device=device),
-        #          # 动作a的类型必须是long
-        #          'a_logprob': torch.tensor(self.buffer['a_logprob'][:, :self.max_episode_len], dtype=torch.float32,
-        #                                    device=device),
-        #          'active': torch.tensor(self.buffer['active'][:, :self.max_episode_len], dtype=torch.float32,
-        #                                 device=device),
-        #          'adv': torch.tensor(adv, dtype=torch.float32, device=device),
-        #          'v_target': torch.tensor(v_target, dtype=torch.float32, device=device)}
+            for i in range(len(ep_lens)):
+                seq_len = min(args.transformer_max_len, ep_lens[i])
 
-        return batch
+                _a = ReplayBuffer.unfold(a_batch[i], size=seq_len, step=1)
+                _a_logprob = ReplayBuffer.unfold(a_logprob_batch[i], size=seq_len, step=1)
+                _adv = ReplayBuffer.unfold(adv[i], size=seq_len, step=1)
+                _v_target = ReplayBuffer.unfold(v_target[i], size=seq_len, step=1)
+                _active = ReplayBuffer.unfold(active[i], size=seq_len, step=1)
+
+                # Pad to max_seq_len
+                if seq_len < max_seq_len:
+                    _a = ReplayBuffer.pad_sequence(_a, max_seq_len - seq_len)
+                    _a_logprob = ReplayBuffer.pad_sequence(_a_logprob, max_seq_len - seq_len)
+                    _adv = ReplayBuffer.pad_sequence(_adv, max_seq_len - seq_len)
+                    _v_target = ReplayBuffer.pad_sequence(_v_target, max_seq_len - seq_len)
+                    _active = ReplayBuffer.pad_sequence(_active, max_seq_len - seq_len)
+
+                a_batch_unfolded.append(_a)
+                a_logprob_batch_unfolded.append(_a_logprob)
+                adv_batch_unfolded.append(_adv)
+                v_target_batch_unfolded.append(_v_target)
+                active_batch_unfolded.append(_active)
+
+            # Merge batches of sequences
+            s = torch.concatenate(s_batch_unfolded)
+            a = torch.concatenate(a_batch_unfolded)
+            a_logprob = torch.concatenate(a_logprob_batch_unfolded)
+            adv = torch.concatenate(adv_batch_unfolded)
+            v_target = torch.concatenate(v_target_batch_unfolded)
+            active = torch.concatenate(active_batch_unfolded)
+
+            del s_batch_unfolded, a_batch_unfolded, a_logprob_batch_unfolded, adv_batch_unfolded, v_target_batch_unfolded, active_batch_unfolded
+
+            batch = dict(s=s, a=a, a_logprob=a_logprob, adv=adv, v_target=v_target, active=active)
+
+            return batch
 
     @staticmethod
     def create_batch(replay_buffers, args, action_function, value_function, device):
@@ -258,6 +276,6 @@ class ReplayBuffer:
         # active = np.vstack(active)
 
         batch = ReplayBuffer.get_training_data(s, s_last, a, a_logprob, r, dw, ep_lens, args,
-                                               action_function, value_function, device)
+                                               value_function, device)
 
         return batch

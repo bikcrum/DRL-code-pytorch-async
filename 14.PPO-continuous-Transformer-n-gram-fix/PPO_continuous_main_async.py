@@ -26,183 +26,12 @@ ray.init(num_cpus=20, num_gpus=1)
 
 # @ray.remote(num_gpus=0.1)
 @ray.remote
-class Evaluator:
-    def __init__(self, env, actor, state_norm, args, device):
-        self.args = args
-        self.state_norm = state_norm
-        self.env = env()
-        self.device = device
-        self.actor = deepcopy(actor).to(device)
-
-    def update_model(self, new_actor_params):
-        for p, new_p in zip(self.actor.parameters(), new_actor_params):
-            p.data.copy_(new_p)
-
-    def run(self, render=False):
-        def choose_action_transformer(s):
-            with torch.no_grad():
-                s = np.stack(s)
-
-                s = torch.tensor(s, dtype=torch.float, device=self.device)
-
-                assert s.dim() == 2, f"s must be 2D, [seq_len, state_dim]. Actual: {s.dim()}"
-
-                # Add batch dimension
-                s = s.unsqueeze(0)
-                # s: [1, seq_len, state_dim]
-
-                mean, _ = self.actor(s)
-                # mean: [1, seq_len, action_dim]
-
-                # Get output from last observation
-                mean = mean.squeeze(0)[-1]
-                # mean: [action_dim]
-
-                return mean.detach().numpy()
-
-        reward = 0
-        length = 0
-
-        s = self.env.reset()
-        if self.args.use_state_norm:
-            s = self.state_norm(s, update=False)
-
-        done = False
-        episode_length = 0
-        episode_reward = 0
-        curr_buf = collections.deque(maxlen=self.args.transformer_max_len)
-
-        while not done:
-            if len(curr_buf) == self.args.transformer_max_len:
-                curr_buf.popleft()
-            curr_buf.append(s)
-            a = choose_action_transformer(curr_buf)
-            s_, r, done, _ = self.env.step(a * args.max_action)
-
-            if render and not done:
-                self.env.render()
-
-            if self.args.use_state_norm:
-                s_ = self.state_norm(s_, update=False)
-
-            episode_reward += r
-            episode_length += 1
-            s = s_
-        reward += episode_reward
-        length += episode_length
-
-        return reward, length
-
-
-# @ray.remote(num_gpus=0.1)
-@ray.remote
-class Collector:
-    def __init__(self, env, actor, state_norm, reward_scaling, reward_norm, args, device):
-        self.env = env()
-        self.state_norm = state_norm
-        self.reward_scaling = reward_scaling
-        self.reward_norm = reward_norm
-        self.args = args
-
-        self.device = device
-        self.actor = deepcopy(actor).to(device)
-
-    def update_model(self, new_actor_params):
-        for p, new_p in zip(self.actor.parameters(), new_actor_params):
-            p.data.copy_(new_p)
-
-    def run(self, render=False):
-        def choose_action_transformer(s):
-            with torch.no_grad():
-                s = np.stack(s)
-
-                s = torch.tensor(s, dtype=torch.float, device=self.device)
-
-                assert s.dim() == 2, f"s must be 2D, [seq_len, state_dim]. Actual: {s.dim()}"
-
-                # Add batch dimension
-                s = s.unsqueeze(0)
-                # s: [1, seq_len, state_dim]
-
-                dist = self.actor.pdf(s)
-                a = dist.sample()
-                # a: [1, seq_len, action_dim]
-
-                a_logprob = dist.log_prob(a)
-                # a_logprob: [1, seq_len, action_dim]
-
-                a, a_logprob = a.squeeze(0)[-1], a_logprob.squeeze(0)[-1]
-                # a: [action_dim], a_logprob: [action_dim]
-
-                return a.detach().numpy(), a_logprob.detach().numpy()
-
-        replay_buffer = ReplayBuffer(self.args)
-
-        total_reward = []
-        total_steps = []
-
-        while replay_buffer.count < self.args.batch_size:
-            episode_reward = 0
-
-            s = self.env.reset()
-
-            if self.args.use_reward_scaling:
-                self.reward_scaling.reset()
-
-            state_buffer = collections.deque(maxlen=self.args.transformer_max_len)
-
-            for seq_step in range(self.args.time_horizon):
-                if self.args.use_state_norm:
-                    s = self.state_norm(s)
-
-                if len(state_buffer) == self.args.transformer_max_len:
-                    state_buffer.popleft()
-
-                state_buffer.append(s)
-
-                a, a_logprob = choose_action_transformer(state_buffer)
-                s_, r, done, _ = self.env.step(a * args.max_action)
-
-                if render and not done:
-                    self.env.render()
-
-                episode_reward += r
-
-                if done and seq_step != self.args.time_horizon - 1:
-                    dw = True
-                else:
-                    dw = False
-
-                if self.args.use_reward_scaling:
-                    r = self.reward_scaling(r)
-
-                replay_buffer.store_transition(s, a, a_logprob, r, dw)
-
-                s = s_
-
-                if done or replay_buffer.count == self.args.batch_size:
-                    break
-
-            if self.args.use_state_norm:
-                s = self.state_norm(s)
-
-            replay_buffer.store_last_state(s)
-
-            if done:
-                total_reward.append(episode_reward)
-                total_steps.append(seq_step + 1)
-
-        return replay_buffer, np.mean(total_reward), np.mean(total_steps), replay_buffer.count
-
-
-@ray.remote
 class Worker:
-    def __init__(self, env, dispatcher, actor, state_norm, reward_scaling, reward_norm, args, device, worker_id):
+    def __init__(self, env, dispatcher, actor, args, device, worker_id):
         self.env = env()
         self.dispatcher = dispatcher
-        self.state_norm = state_norm
-        self.reward_scaling = reward_scaling
-        self.reward_norm = reward_norm
+        if args.use_reward_scaling:
+            self.reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
         self.args = args
         self.device = device
         self.actor = deepcopy(actor).to(device)
@@ -257,16 +86,13 @@ class Worker:
         state_buffer = collections.deque(maxlen=self.args.transformer_max_len)
 
         for step in range(max_ep_len):
-            if self.args.use_state_norm:
-                s = self.state_norm(s)
-
             if len(state_buffer) == self.args.transformer_max_len:
                 state_buffer.popleft()
 
             state_buffer.append(s)
 
             a, a_logprob = self.get_action(state_buffer, deterministic=False)
-            s_, r, done, _ = self.env.step(a)
+            s_, r, done, _ = self.env.step(a * self.args.max_action)
 
             if render and not done:
                 self.env.render()
@@ -293,9 +119,6 @@ class Worker:
                 del replay_buffer
                 return
 
-        if self.args.use_state_norm:
-            s = self.state_norm(s)
-
         replay_buffer.store_last_state(s)
 
         return replay_buffer, episode_reward, step + 1, self.worker_id
@@ -313,7 +136,7 @@ class Worker:
                 curr_buf.popleft()
             curr_buf.append(s)
             a = self.get_action(curr_buf, deterministic=True)
-            s_, r, done, _ = self.env.step(a)
+            s_, r, done, _ = self.env.step(a * self.args.max_action)
 
             if render and not done:
                 self.env.render()
@@ -471,7 +294,7 @@ def main(args, env_name, previous_run=None, parent_run=None):
 
     args.state_dim = env.observation_space.shape[0]
     args.action_dim = env.action_space.shape[0]
-    args.max_action = float(env.action_space.high[0])
+    args.max_action = env.action_space.high
     args.time_horizon = env._max_episode_steps
     print("env={}".format(env_name))
     print("state_dim={}".format(args.state_dim))
@@ -489,14 +312,6 @@ def main(args, env_name, previous_run=None, parent_run=None):
 
     run, epochs, total_steps = init_logger(agent, run_name, env_name, previous_run, parent_run)
 
-    state_norm = Normalization(shape=args.state_dim)
-    reward_norm = None
-    reward_scaling = None
-    if args.use_reward_norm:
-        reward_norm = Normalization(shape=1)
-    elif args.use_reward_scaling:
-        reward_scaling = RewardScaling(shape=1, gamma=args.gamma)
-
     pbar = tqdm.tqdm(total=args.max_steps)
 
     prev_total_steps = 0
@@ -506,15 +321,11 @@ def main(args, env_name, previous_run=None, parent_run=None):
 
     dispatcher = Dispatcher.remote()
 
-    collectors = [
-        Worker.remote(lambda: env, dispatcher, actor_global, state_norm, reward_scaling, reward_norm, args, dev_inf,
-                      i)
-        for i in range(args.n_collectors)]
+    collectors = [Worker.remote(lambda: env, dispatcher, actor_global, args, dev_inf, i) for i in
+                  range(args.n_collectors)]
 
-    evaluators = [
-        Worker.remote(lambda: env, dispatcher, actor_global, state_norm, reward_scaling, reward_norm, args, dev_inf,
-                      i)
-        for i in range(args.n_evaluators)]
+    evaluators = [Worker.remote(lambda: env, dispatcher, actor_global, args, dev_inf, i) for i in
+                  range(args.n_evaluators)]
 
     replay_buffer = ReplayBuffer(args, buffer_size=args.buffer_size)
 
@@ -553,6 +364,8 @@ def main(args, env_name, previous_run=None, parent_run=None):
                          for collector in
                          collectors]
 
+        evaluator_steps = 0
+
         eval_rewards = []
         eval_lengths = []
 
@@ -564,7 +377,7 @@ def main(args, env_name, previous_run=None, parent_run=None):
         while evaluator_ids or collector_ids:
             done_ids, remain_ids = ray.wait(collector_ids + evaluator_ids, num_returns=1)
 
-            _replay_buffer, episode_reward, episode_length, worker_id = ray.get(done_ids)[0]
+            _replay_buffer, episode_reward, episode_length, worker_id = ray.get(done_ids[0])
 
             if _replay_buffer is None:
                 # This worker is evaluator
@@ -572,7 +385,9 @@ def main(args, env_name, previous_run=None, parent_run=None):
                 eval_rewards.append(episode_reward)
                 eval_lengths.append(episode_length)
 
-                rem_buffer_size = args.buffer_size - np.sum(eval_lengths)
+                evaluator_steps += episode_length
+
+                rem_buffer_size = args.buffer_size - evaluator_steps
 
                 if rem_buffer_size > 0:
                     logging.debug(f"{rem_buffer_size} steps remaining to evaluate")
@@ -606,7 +421,7 @@ def main(args, env_name, previous_run=None, parent_run=None):
                     map(ray.cancel, collector_ids)
                     collector_ids.clear()
 
-        if eval_rewards:
+        if evaluator_steps:
             reward, length = np.mean(eval_rewards), np.mean(eval_lengths)
 
             if reward >= max_reward:
@@ -627,19 +442,15 @@ def main(args, env_name, previous_run=None, parent_run=None):
         # Merge buffers
         batch = ReplayBuffer.create_batch(replay_buffer, args, critic_global, dev_inf)
 
-        train_rewards = np.array(train_rewards)
-        train_lens = np.array(train_lengths)
-        collector_total_steps = replay_buffer.count
+        train_rewards = np.array(train_rewards).mean()
+        train_lens = np.array(train_lengths).mean()
 
-        episode_reward = train_rewards[~np.isnan(train_rewards)].mean()
-        episode_length = train_lens[~np.isnan(train_lens)].mean()
+        total_steps += replay_buffer.count
 
-        total_steps += collector_total_steps
+        pbar.update(replay_buffer.count)
 
-        pbar.update(collector_total_steps)
-
-        log = {'episode_reward': episode_reward,
-               'episode_length': episode_length,
+        log = {'episode_reward': train_rewards,
+               'episode_length': train_lens,
                'total_steps': total_steps,
                'epochs': epochs,
                'new_batch_size': batch['a'].size(0),
@@ -691,14 +502,14 @@ def main(args, env_name, previous_run=None, parent_run=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Hyperparameters Setting for PPO-continuous-transformer")
     parser.add_argument("--max_steps", type=int, default=int(4e9), help="Maximum number of training steps")
-    parser.add_argument("--evaluate_freq", type=float, default=12800, help="Policy evaluation frequency")
-    parser.add_argument("--n_collectors", type=int, default=8, help="Number of collectors")
+    parser.add_argument("--evaluate_freq", type=float, default=5e3, help="Policy evaluation frequency")
+    parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
-    parser.add_argument("--buffer_size", type=int, default=12800, help="Batch size")
-    parser.add_argument("--eval_steps", type=int, default=6400, help="Batch size")
+    parser.add_argument("--buffer_size", type=int, default=8192, help="Batch size")
+    parser.add_argument("--eval_steps", type=int, default=8192, help="Batch size")
     parser.add_argument("--mini_batch_size", type=int, default=256, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64, help="Hidden layers of sequential layer neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=8,
+    parser.add_argument("--transformer_max_len", type=int, default=16,
                         help="The maximum length of sequence in transformer encoder")
     parser.add_argument('--transformer_num_layers', type=int, default=1, help='Number of layers in transformer encoder')
     parser.add_argument('--transformer_nhead', type=int, default=1,

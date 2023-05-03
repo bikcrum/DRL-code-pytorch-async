@@ -41,6 +41,7 @@ class ReplayBuffer:
 
         self.buffer['s'][self.count:self.count + rem_count] = replay_buffer.buffer['s'][:rem_count]
         self.buffer['a'][self.count:self.count + rem_count] = replay_buffer.buffer['a'][:rem_count]
+        self.buffer['a_logprob'][self.count:self.count + rem_count] = replay_buffer.buffer['a_logprob'][:rem_count]
         self.buffer['r'][self.count:self.count + rem_count] = replay_buffer.buffer['r'][:rem_count]
         self.buffer['dw'][self.count:self.count + rem_count] = replay_buffer.buffer['dw'][:rem_count]
 
@@ -51,7 +52,7 @@ class ReplayBuffer:
         self.ep_lens.append(rem_count)
 
     def is_full(self):
-        return self.count >= self.args.buffer_size
+        return self.count >= self.buffer_size
 
     @staticmethod
     def get_adv(v, v_next, r, dw, active, args):
@@ -60,9 +61,10 @@ class ReplayBuffer:
         gae = 0
         with torch.no_grad():
             deltas = r + args.gamma * v_next * ~dw - v
-            for t in reversed(range(r.size(0))):
-                gae = deltas[t] + args.gamma * args.lamda * gae
-                adv[t] = gae
+
+            for t in reversed(range(r.size(1))):
+                gae = deltas[:, t] + args.gamma * args.lamda * gae
+                adv[:, t] = gae
             v_target = adv + v
             if args.use_adv_norm:
                 mean = adv[active].mean()
@@ -160,12 +162,12 @@ class ReplayBuffer:
                 v_next_batch.append(_v_next)
 
             # Pad to maximum episode length (This is not same as max_seq_len)
-            v = pad_sequence(v_batch, padding_value=0)
-            v_next = pad_sequence(v_next_batch, padding_value=0)
-            r = pad_sequence(r_batch, padding_value=0)
+            v = pad_sequence(v_batch, padding_value=0, batch_first=True)
+            v_next = pad_sequence(v_next_batch, padding_value=0, batch_first=True)
+            r = pad_sequence(r_batch, padding_value=0, batch_first=True)
             active = torch.ones_like(dw).split(ep_lens)
-            dw = pad_sequence(dw_batch, padding_value=0)
-            active = pad_sequence(active, padding_value=0)
+            dw = pad_sequence(dw_batch, padding_value=1, batch_first=True)
+            active = pad_sequence(active, padding_value=0, batch_first=True)
 
             # Compute advantages
             adv, v_target = ReplayBuffer.get_adv(v, v_next, r, dw, active, args)
@@ -223,7 +225,7 @@ class ReplayBuffer:
             dw = replay_buffer.buffer['dw']
             ep_lens = replay_buffer.ep_lens
 
-            batch = ReplayBuffer.get_training_data(s, s_last, a, a_logprob, r, dw, ep_lens, args,
-                                                   value_function, device)
+        batch = ReplayBuffer.get_training_data(s, s_last, a, a_logprob, r, dw, ep_lens, args,
+                                               value_function, device)
 
-            return batch
+        return batch

@@ -63,7 +63,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
 
     args = parser.parse_args()
 
-    env = gym.make(env_name, hardcore=True)  # When evaluating the policy, we need to rebuild an environment
+    env = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
     # Set random seed
     env.seed(seed)
     env.action_space.seed(seed)
@@ -248,11 +248,11 @@ if __name__ == '__main__':
     # evaluate_policy(run_name='2023-03-19 23:32:54.522117')
     # evaluate_policy(run_name='2023-03-20 13:17:36.096833')
 
-    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 2
+    env_names = ['HalfCheetah-v2','MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 0
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-18 00:00:41.543640',
+                    run_name='2023-04-18 21:23:21.752986',
                     replace=True,
                     best=False)
     # random()

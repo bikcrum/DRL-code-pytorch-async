@@ -37,7 +37,7 @@ def evaluate_policy(env_name, run_name, replace=True, best=True, seed=0):
     # parser.add_argument("--mini_batch_size", type=int, default=2, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--transformer_max_len", type=int, default=16,
+    parser.add_argument("--transformer_max_len", type=int, default=1,
                         help="The maximum length of observation that transformed needed to attend backward")
     parser.add_argument('--transformer_num_layers', type=int, default=1, help='Number of layers in transformer encoder')
     parser.add_argument('--nhead', type=int, default=1, help='Number of attention heads in transformer encoder')
@@ -269,13 +269,13 @@ if __name__ == '__main__':
     # evaluate_policy(run_name='2023-03-19 23:32:54.522117')
     # evaluate_policy(run_name='2023-03-20 13:17:36.096833')
 
-    env_names = ['HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_names = ['Humanoid-v4', 'HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
     env_index = 0
 
     evaluate_policy(env_name=env_names[env_index],
-                    run_name='2023-04-19 00:58:25.658688',
+                    run_name='2023-04-19 02:58:04.217244',
                     replace=True,
-                    best=False)
+                    best=True)
     # random()
 
     # cv2.imshow('rgb_image', cv2.resize(rgb_image, (320, 320)))

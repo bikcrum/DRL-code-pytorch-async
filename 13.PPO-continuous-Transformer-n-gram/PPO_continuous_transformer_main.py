@@ -61,7 +61,7 @@ class Runner:
             entity='team-osu',
             project=f'toy-test-{self.env_name}',
             name=str(time_now),
-            mode='disabled',
+            # mode='disabled',
             config=args.__dict__
         )
 

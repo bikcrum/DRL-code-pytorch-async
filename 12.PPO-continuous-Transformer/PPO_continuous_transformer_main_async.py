@@ -27,10 +27,12 @@ ray.init(num_cpus=20, num_gpus=1, local_mode=False)
 # @ray.remote(num_gpus=0.1)
 @ray.remote
 class Evaluator:
-    def __init__(self, env, state_norm, args):
+    def __init__(self, env_name, state_norm, args):
         self.args = args
         self.state_norm = state_norm
-        self.env = env()
+        # self.env = env()
+        self.env = gym.make(env_name)
+
 
     def run(self, actor, device, render=False):
         actor = actor.to(device)
@@ -116,8 +118,8 @@ class Evaluator:
 # @ray.remote(num_gpus=0.1)
 @ray.remote
 class Collector:
-    def __init__(self, env, state_norm, reward_scaling, reward_norm, batch_size, args, device):
-        self.env = env()
+    def __init__(self, env_name, state_norm, reward_scaling, reward_norm, batch_size, args, device):
+        self.env = gym.make(env_name)
         self.state_norm = state_norm
         self.reward_scaling = reward_scaling
         self.reward_norm = reward_norm
@@ -338,8 +340,8 @@ def main(args, env_name, seed):
 
     # env = gym.make(env_name)
     # env_evaluate = gym.make(env_name)  # When evaluating the policy, we need to rebuild an environment
-    env = gym.make(env_name, hardcore=True)
-    env_evaluate = gym.make(env_name, hardcore=True)
+    env = gym.make(env_name)
+    env_evaluate = gym.make(env_name)
     np.random.seed(seed)
     torch.manual_seed(seed)
     env.seed(seed)
@@ -423,12 +425,12 @@ def main(args, env_name, seed):
 
     prev_total_steps = 0
 
-    collectors = [Collector.remote(lambda: env, state_norm, reward_scaling, reward_norm,
+    collectors = [Collector.remote(env_name, state_norm, reward_scaling, reward_norm,
                                    _args.batch_size,
                                    _args,
                                    dev_inf) for _ in range(n_collectors)]
 
-    evaluators = [Evaluator.remote(lambda: env_evaluate, state_norm, args) for _ in range(args.n_evaluators)]
+    evaluators = [Evaluator.remote(env_name, state_norm, args) for _ in range(args.n_evaluators)]
 
     while total_steps < args.max_train_steps:
         actor = agent.actor.to(dev_inf)
@@ -553,8 +555,8 @@ if __name__ == '__main__':
     parser.add_argument("--n_collectors", type=int, default=4, help="Number of collectors")
     parser.add_argument("--n_evaluators", type=int, default=4, help="Number of evaluators")
     parser.add_argument("--policy_dist", type=str, default="Gaussian", help="Beta or Gaussian")
-    parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
-    parser.add_argument("--mini_batch_size", type=int, default=16, help="Minibatch size")
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
+    parser.add_argument("--mini_batch_size", type=int, default=8, help="Minibatch size")
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
     parser.add_argument("--transformer_max_len", type=int, default=16,
@@ -580,8 +582,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    env_names = ['MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
-    env_index = 2
+    env_names = ['HalfCheetah-v2', 'MountainCarContinuous-v0', 'Pendulum-v1', 'BipedalWalker-v3']
+    env_index = 0
 
     # Create new run from scratch
     main(args, env_name=env_names[env_index], seed=0)

@@ -39,11 +39,7 @@ class Actor_Transformer(nn.Module):
     def __init__(self, args):
         super(Actor_Transformer, self).__init__()
 
-        self.fc_layers = nn.Sequential(
-            nn.Linear(args.state_dim, args.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(args.hidden_dim, args.hidden_dim),
-        )
+        self.actor_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=args.transformer_dropout,
                                               max_len=args.transformer_max_len)
@@ -57,20 +53,17 @@ class Actor_Transformer(nn.Module):
 
         if args.use_orthogonal_init:
             print("------use_orthogonal_init------")
-            for layer in self.fc_layers:
-                if isinstance(layer, nn.Linear):
-                    orthogonal_init(layer)
-
+            orthogonal_init(self.actor_fc1, gain=0.01)
             orthogonal_init(self.mean_layer, gain=0.01)
             orthogonal_init(self.std_layer, gain=0.01)
 
     # s: [batch_size, seq_len, state_dim]
     def forward(self, s):
-        s = self.fc_layers(s)
-        # s: [batch_size, seq_len, hidden_dim]
-
         s = s.transpose(0, 1)
         # s: [seq_len, batch_size, hidden_dim * 2]
+
+        s = torch.relu(self.actor_fc1(s))
+        # s: [batch_size, seq_len, hidden_dim]
 
         s = self.pos_encoder(s)
         # s: [seq_len, batch_size, hidden_dim * 2]
@@ -98,11 +91,7 @@ class Critic_Transformer(nn.Module):
     def __init__(self, args):
         super(Critic_Transformer, self).__init__()
 
-        self.fc_layers = nn.Sequential(
-            nn.Linear(args.state_dim, args.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(args.hidden_dim, args.hidden_dim),
-        )
+        self.critic_fc1 = nn.Linear(args.state_dim, args.hidden_dim)
 
         self.pos_encoder = PositionalEncoding(d_model=args.hidden_dim, dropout=args.transformer_dropout,
                                               max_len=args.transformer_max_len)
@@ -115,18 +104,15 @@ class Critic_Transformer(nn.Module):
 
         if args.use_orthogonal_init:
             print("------use_orthogonal_init------")
-            for layer in self.fc_layers:
-                if isinstance(layer, nn.Linear):
-                    orthogonal_init(layer)
-
+            orthogonal_init(self.critic_fc1, gain=0.01)
             orthogonal_init(self.value_layer, gain=0.01)
 
     def forward(self, s):
-        s = self.fc_layers(s)
-        # s: [batch_size, seq_len, hidden_dim]
-
         s = s.transpose(0, 1)
         # s: [seq_len, batch_size, hidden_dim * 2]
+
+        s = torch.relu(self.critic_fc1(s))
+        # s: [batch_size, seq_len, hidden_dim]
 
         s = self.pos_encoder(s)
         # s: [seq_len, batch_size, hidden_dim * 2]
@@ -134,11 +120,11 @@ class Critic_Transformer(nn.Module):
         s, _ = self.transformer_encoder(s, mask=nn.Transformer.generate_square_subsequent_mask(s.size(0)).to(s.device))
         # s: [seq_len, batch_size, hidden_dim * 2]
 
-        s = s.transpose(0, 1)
-        # s: [batch_size, seq_len, hidden_dim * 2]
-
         s = self.value_layer(s)
         # mean: [batch_size, seq_len, 1]
+
+        s = s.transpose(0, 1)
+        # s: [batch_size, seq_len, 1]
 
         return s
 

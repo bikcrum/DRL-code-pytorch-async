@@ -9,6 +9,7 @@ from torch.distributions import Beta, Normal
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from replaybuffer import ReplayBuffer
+import torch.nn.functional as F
 
 
 # Trick 8: orthogonal initialization
@@ -121,8 +122,8 @@ class Actor_Transformer(nn.Module):
 
         # self.actor_fc2 = nn.Linear(args.hidden_dim, args.action_dim)
         self.mean_layer = nn.Linear(args.hidden_dim, args.action_dim)
-        # self.log_std_layer = nn.Linear(args.hidden_dim, args.action_dim)
-        self.log_std = nn.Parameter(torch.zeros(1, args.action_dim))
+        self.std_layer = nn.Linear(args.hidden_dim, args.action_dim)
+        # self.log_std = nn.Parameter(torch.zeros(1, args.action_dim))
 
         if args.use_orthogonal_init:
             print("------use orthogonal init------")
@@ -169,13 +170,14 @@ class Actor_Transformer(nn.Module):
         # log_std = torch.expand(self.log_std_layer(logit))
         # log_std: [batch_size, seq_len, action_dim]
 
-        log_std = self.log_std.expand_as(mean)  # To make 'log_std' have the same dimension as 'mean'
+        # log_std = self.log_std.expand_as(mean)  # To make 'log_std' have the same dimension as 'mean'
+        std = F.softplus(self.std_layer(logit))  # To make 'log_std' have the same dimension as 'mean'
 
-        return mean, log_std
+        return mean, std
 
     def get_distribution(self, s):
-        mean, log_std = self.forward(s)
-        std = log_std.exp()
+        mean, std = self.forward(s)
+        # std = log_std.exp()
         return Normal(mean, std)
 
 
